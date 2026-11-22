@@ -183,6 +183,32 @@ def _inspect(container: str, network: str, state: Path) -> None:
             raise AcceptanceError("MCP knowledge/token mounts must be read-only")
 
 
+def _stage_package(source: Path) -> None:
+    """Stage only build/Compose inputs, never local venv, state or secrets.
+
+    The staging source is a Git checkout; allowlisting files prevents an
+    operator's unrelated working-tree files entering the temporary context.
+    """
+    source.mkdir(mode=0o700)
+    for name in (
+        ".dockerignore", "Dockerfile", "requirements.txt",
+        "compose.addon.yaml", "switchboard-addon.yaml",
+    ):
+        src = PACKAGE / name
+        if src.is_symlink() or not src.is_file():
+            raise AcceptanceError(f"Missing or unsafe add-on package file: {name}")
+        shutil.copyfile(src, source / name)
+    package = PACKAGE / "silverbullet_mcp"
+    if package.is_symlink() or not package.is_dir():
+        raise AcceptanceError("Missing or unsafe SilverBullet MCP package")
+    dest = source / "silverbullet_mcp"
+    dest.mkdir(mode=0o700)
+    for file in sorted(package.glob("*.py")):
+        if file.is_symlink() or not file.is_file():
+            raise AcceptanceError("Unsafe Python source in SilverBullet MCP package")
+        shutil.copyfile(file, dest / file.name)
+
+
 def run() -> dict:
     if not PACKAGE.is_dir() or not ACCEPTANCE.is_file():
         raise AcceptanceError("Required staged package or acceptance module absent")
@@ -194,8 +220,7 @@ def run() -> dict:
     with tempfile.TemporaryDirectory(prefix="switchboard-silverbullet-addon-e2e-") as td:
         root = Path(td)
         source = root / "source"
-        shutil.copytree(PACKAGE, source, symlinks=False,
-                        ignore=shutil.ignore_patterns(".git", ".github", "tests", "scripts", "__pycache__", "*.pyc"))
+        _stage_package(source)
         state = root / "state"
         state.mkdir(mode=0o700)
         space = state / "space"
