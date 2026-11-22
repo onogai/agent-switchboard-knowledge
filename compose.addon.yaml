@@ -15,7 +15,7 @@ services:
         target: /data
     networks:
       addons:
-        aliases: [addon-${SWITCHBOARD_ADDON_INSTANCE}-silverbulletapp]
+        aliases: ["addon-${SWITCHBOARD_ADDON_INSTANCE}-silverbulletapp"]
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -51,7 +51,7 @@ services:
         read_only: true
     networks:
       addons:
-        aliases: [addon-${SWITCHBOARD_ADDON_INSTANCE}]
+        aliases: ["addon-${SWITCHBOARD_ADDON_INSTANCE}"]
     depends_on: [silverbulletapp]
     read_only: true
     tmpfs: [/tmp]
