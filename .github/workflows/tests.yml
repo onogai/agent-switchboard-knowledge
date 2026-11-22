@@ -1,0 +1,27 @@
+name: Standalone SilverBullet add-on checks
+on:
+  push:
+    branches: [main, feat/standalone-addon]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install package dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile and unit-test independent add-on
+        run: |
+          python -m compileall -q silverbullet_mcp scripts tests addon_compose_policy.py
+          python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Confirm no Switchboard Core code is vendored
+        run: |
+          test ! -d gateway
+          test ! -d infrastructure_admin
+          test ! -d addon_packages

@@ -1,0 +1,64 @@
+services:
+  silverbulletapp:
+    image: ghcr.io/silverbulletmd/silverbullet:2.12.1-slim
+    restart: unless-stopped
+    user: "${HOST_UID:?}:${HOST_GID:?}"
+    command: ["--single"]
+    environment:
+      SB_FOLDER: /data
+      SB_RUNTIME_API: "0"
+      SB_USER: "admin:${SWITCHBOARD_ADDON_SECRET_PASSWORD:?}"
+      SB_AUTH_TOKEN: "${SWITCHBOARD_ADDON_SECRET_TOKEN:?}"
+    volumes:
+      - type: bind
+        source: "${SWITCHBOARD_ADDON_STATE:?}/space"
+        target: /data
+    networks:
+      addons:
+        aliases: [addon-${SWITCHBOARD_ADDON_INSTANCE}-silverbulletapp]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  silverbulletadapter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    user: "${HOST_UID:?}:${HOST_GID:?}"
+    environment:
+      HOME: /tmp
+      SILVERBULLET_MCP_PORT: "8773"
+      SILVERBULLET_MCP_BIND_HOST: "0.0.0.0"
+      SILVERBULLET_MCP_TOKEN_FILE: /run/secrets/silverbullet-mcp-token
+      KNOWLEDGE_SPACE_DIR: /knowledge
+      SILVERBULLET_MCP_WRITE_ENABLED: "true"
+      KNOWLEDGE_TOKEN_FILE: /run/secrets/silverbullet-token
+      KNOWLEDGE_BASE_URL: "http://addon-${SWITCHBOARD_ADDON_INSTANCE}-silverbulletapp:3000"
+    volumes:
+      - type: bind
+        source: "${SWITCHBOARD_ADDON_STATE:?}/space"
+        target: /knowledge
+        read_only: true
+      - type: bind
+        source: "${SWITCHBOARD_ADDON_STATE:?}/secrets/token"
+        target: /run/secrets/silverbullet-token
+        read_only: true
+      - type: bind
+        source: "${SWITCHBOARD_ADDON_STATE:?}/secrets/mcptoken"
+        target: /run/secrets/silverbullet-mcp-token
+        read_only: true
+    networks:
+      addons:
+        aliases: [addon-${SWITCHBOARD_ADDON_INSTANCE}]
+    depends_on: [silverbulletapp]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+networks:
+  addons:
+    external: true
+    name: "${SWITCHBOARD_ADDONS_NETWORK:?}"

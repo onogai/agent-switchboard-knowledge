@@ -1,0 +1,10 @@
+# Local state is provisioned outside Git by Switchboard
+state/
+secrets/
+.env
+*.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.DS_Store

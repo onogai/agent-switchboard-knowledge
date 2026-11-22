@@ -1,0 +1,139 @@
+"""Standalone SilverBullet MCP. Does not import the Switchboard Gateway.
+
+Deploy it on a private network, then register it as an HTTP source in
+Switchboard Manager. Do not publish this unauthenticated endpoint to the
+internet; Switchboard handles user OAuth and tool grants.
+"""
+from __future__ import annotations
+
+import asyncio
+import hmac
+import os
+from pathlib import Path
+import stat
+
+from fastmcp import FastMCP
+from fastmcp.server.auth import AccessToken, TokenVerifier
+from mcp.types import ToolAnnotations
+
+from .knowledge import KnowledgeClient, KnowledgeError, list_feedback, search_pages
+
+
+class PrivateBearerVerifier(TokenVerifier):
+    """Internal service-to-service opaque bearer verifier (no OAuth server).
+
+    The expected token is read from a private, read-only file on startup.
+    Compare in constant time; do not print/store the token in Registry logs.
+    """
+
+    def __init__(self, token_file: Path):
+        super().__init__()
+        metadata = token_file.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077:
+            raise ValueError("MCP token file must be a private regular file")
+        token = token_file.read_text(encoding="utf-8").strip()
+        if len(token) < 48 or not token.isascii() or not token.isprintable():
+            raise ValueError("MCP bearer token is missing or too short")
+        self._expected = token
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        if not hmac.compare_digest(token, self._expected):
+            return None
+        return AccessToken(
+            token=token,
+            client_id="switchboard-core",
+            subject="switchboard-core",
+            scopes=[],
+        )
+
+
+def _authentication() -> TokenVerifier | None:
+    """Allow anonymous MCP only when bound to *container* loopback.
+
+    Network-reachable MCP must have a dedicated, private bearer token file.
+    The SilverBullet API token is not accepted here.
+    """
+    bind = os.environ.get("SILVERBULLET_MCP_BIND_HOST", "127.0.0.1")
+    filename = os.environ.get("SILVERBULLET_MCP_TOKEN_FILE")
+    if filename:
+        return PrivateBearerVerifier(Path(filename))
+    if bind != "127.0.0.1":
+        raise ValueError("Network-reachable MCP requires SILVERBULLET_MCP_TOKEN_FILE")
+    return None
+
+
+mcp = FastMCP("Switchboard SilverBullet", auth=_authentication())
+
+
+async def notes_search(query: str, limit: int = 10) -> dict:
+    """Use to locate notes by keywords; returns page paths and excerpts, not full Markdown. Query must be 2–200 characters, limit 1–30. Read a matching page using notes_read_page."""
+    client = KnowledgeClient.from_environment()
+    return await asyncio.to_thread(search_pages, client.root, query, limit)
+
+
+async def notes_read_page(page: str) -> dict:
+    """Read the complete Markdown of a SilverBullet page and its current ETag. Use after notes_search or before any update or feedback resolution. Pass page path without optional .md."""
+    return await asyncio.to_thread(KnowledgeClient.from_environment().read_page, page)
+
+
+def _require_write_mode() -> None:
+    # Default deny until an explicitly trusted deployment opts into writes.
+    # A staging adapter advertises the stable seven-tool catalog but cannot
+    # mutate existing knowledge even if called directly over its private MCP.
+    if os.environ.get("SILVERBULLET_MCP_WRITE_ENABLED") != "true":
+        raise KnowledgeError("Knowledge writes are disabled for this MCP deployment.")
+
+
+async def notes_capture(title: str, content: str) -> dict:
+    """Capture a new note or conversation result as a uniquely named page under Inbox/. Supply a title and Markdown content; never overwrites another note. For a named Wiki/ page use notes_create_wiki_page."""
+    _require_write_mode()
+    return await asyncio.to_thread(KnowledgeClient.from_environment().create_note, title, content)
+
+
+async def notes_create_wiki_page(page: str, content: str) -> dict:
+    """Create a named Wiki/ page with complete Markdown, refusing to overwrite existing pages. Use notes_capture to store unstructured quick notes in Inbox/."""
+    _require_write_mode()
+    return await asyncio.to_thread(KnowledgeClient.from_environment().create_page, page, content)
+
+
+async def notes_update_page(page: str, content: str, etag: str) -> dict:
+    """Replace the ENTIRE content of an existing Wiki/ or Inbox/ page using the ETag from notes_read_page. Fails on concurrent changes; re-read and reconcile. This does not append or patch."""
+    _require_write_mode()
+    return await asyncio.to_thread(KnowledgeClient.from_environment().update_page,
+                                   page, content, etag)
+
+
+async def notes_list_agent_feedback(limit: int = 20) -> dict:
+    """Find pending @agent HTML comments in Markdown notes; return feedback ID, page, text and preceding context. Read the current page before calling notes_resolve_agent_feedback."""
+    client = KnowledgeClient.from_environment()
+    return await asyncio.to_thread(list_feedback, client.root, limit)
+
+
+async def notes_resolve_agent_feedback(page: str, feedback_id: str, etag: str) -> dict:
+    """Remove exactly one completed @agent feedback comment. Requires page, feedback ID from notes_list_agent_feedback, and current ETag from notes_read_page. Fails if page changed or ID ambiguous."""
+    _require_write_mode()
+    client = KnowledgeClient.from_environment()
+    return await asyncio.to_thread(client.resolve_feedback, page, feedback_id, etag)
+
+
+_READ_ONLY = {"notes_search", "notes_read_page", "notes_list_agent_feedback"}
+_DESTRUCTIVE = {"notes_update_page", "notes_resolve_agent_feedback"}
+
+for _tool in (
+    notes_search, notes_read_page, notes_capture,
+    notes_create_wiki_page, notes_update_page,
+    notes_list_agent_feedback, notes_resolve_agent_feedback,
+):
+    mcp.tool(_tool, annotations=ToolAnnotations(
+        read_only_hint=_tool.__name__ in _READ_ONLY,
+        destructive_hint=_tool.__name__ in _DESTRUCTIVE,
+        open_world_hint=False,
+    ))
+
+
+if __name__ == "__main__":
+    mcp.run(
+        transport="http",
+        host=os.environ.get("SILVERBULLET_MCP_BIND_HOST", "127.0.0.1"),
+        port=int(os.environ.get("SILVERBULLET_MCP_PORT", "8773")),
+    )
