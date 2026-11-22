@@ -158,6 +158,11 @@ class SilverBulletHTTPAcceptanceTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.environ.stop)
 
     async def test_all_seven_tools_over_actual_mcp_http_with_etag_and_feedback(self):
+        # The ephemeral API and Markdown space are exclusive to this test.
+        # Allow writes for this test only; production remains default-deny.
+        write_mode = patch.dict(os.environ, {"SILVERBULLET_MCP_WRITE_ENABLED": "true"})
+        write_mode.start()
+        self.addCleanup(write_mode.stop)
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
         listener.listen(128)
