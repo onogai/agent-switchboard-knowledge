@@ -101,6 +101,52 @@ class FullAddonE2EDriverTests(unittest.TestCase):
                     with self.assertRaises(e2e.AcceptanceError):
                         e2e._inspect("disposable-container", "sb-e2e-private", state)
 
+    def test_staging_copies_only_allowlisted_files_without_local_state(self):
+        with tempfile.TemporaryDirectory() as td:
+            package = Path(td) / "package"
+            package.mkdir()
+            for name in (".dockerignore", "Dockerfile", "requirements.txt",
+                         "compose.addon.yaml", "switchboard-addon.yaml"):
+                (package / name).write_text("test-input")
+            mcp = package / "silverbullet_mcp"
+            mcp.mkdir()
+            (mcp / "__init__.py").write_text("")
+            (mcp / "server.py").write_text("pass")
+            (mcp / "private.env").write_text("DO_NOT_COPY")
+            (package / ".venv").mkdir()
+            (package / ".venv" / "secret").write_text("DO_NOT_COPY")
+            (package / "state").mkdir()
+            (package / "state" / "knowledge.md").write_text("DO_NOT_COPY")
+            (package / ".env").write_text("DO_NOT_COPY")
+            source = Path(td) / "staged"
+            with patch.object(e2e, "PACKAGE", package):
+                e2e._stage_package(source)
+            self.assertEqual(
+                {x.name for x in source.iterdir()},
+                {".dockerignore", "Dockerfile", "requirements.txt",
+                 "compose.addon.yaml", "switchboard-addon.yaml",
+                 "silverbullet_mcp"},
+            )
+            self.assertEqual(
+                {x.name for x in (source / "silverbullet_mcp").iterdir()},
+                {"__init__.py", "server.py"},
+            )
+
+    def test_staging_rejects_symlinked_inputs(self):
+        with tempfile.TemporaryDirectory() as td:
+            package = Path(td) / "package"
+            package.mkdir()
+            for name in (".dockerignore", "Dockerfile", "requirements.txt",
+                         "compose.addon.yaml", "switchboard-addon.yaml"):
+                (package / name).write_text("safe")
+            (package / "silverbullet_mcp").mkdir()
+            (package / "silverbullet_mcp" / "__init__.py").write_text("")
+            (package / "Dockerfile").unlink()
+            (package / "Dockerfile").symlink_to("requirements.txt")
+            with patch.object(e2e, "PACKAGE", package):
+                with self.assertRaisesRegex(e2e.AcceptanceError, "unsafe"):
+                    e2e._stage_package(Path(td) / "staged")
+
     def test_command_errors_never_echo_credentials(self):
         import subprocess
         failed = subprocess.CompletedProcess(
