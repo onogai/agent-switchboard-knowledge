@@ -93,7 +93,7 @@ class SilverBulletMCPServiceAuthTests(unittest.TestCase):
             PrivateBearerVerifier(self.secret)
 
     def test_issuer_is_not_silverbullet_api_token(self):
-        from addon_packages.silverbullet.silverbullet_mcp import server
+        from silverbullet_mcp import server
         with patch.dict(os.environ, {
             "SILVERBULLET_MCP_TOKEN_FILE": str(self.secret),
             "KNOWLEDGE_TOKEN_FILE": "/run/secrets/silverbullet-token",
