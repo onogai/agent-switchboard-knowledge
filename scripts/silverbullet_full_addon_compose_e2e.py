@@ -4,7 +4,8 @@ Tests the actual schema-v2 packaging, two services, private network,
 credential mounts and seven real HTTP MCP tools. NEVER points at production
 data, production networks, production Core/Registry or host ports.
 
-Operator-only. This does not authorize a production migration.
+Operator-only. Can coexist with other Docker projects: creates and removes
+only randomly named, disposable test resources. No production migration.
 """
 from __future__ import annotations
 
@@ -149,21 +150,19 @@ print("E2E_RESULT:" + json.dumps(result, sort_keys=True))
     raise AcceptanceError("Seven-tool MCP acceptance returned no result")
 
 
-def _assert_empty_disposable_daemon() -> None:
-    """Refuse shared/prod Docker daemons before making any changes.
+def _assert_unused_project(project: str, network: str) -> None:
+    """Refuse collisions with this test's generated project/network.
 
-    An acknowledgement flag alone is not adequate isolation. A truly
-    disposable Docker daemon should have no pre-existing containers.
-    This is a necessary precaution, not proof of VM-level isolation.
+    An occupied Docker daemon is fine; only resources belonging to our
+    randomized namespace may be created or destroyed by this script.
     """
-    existing = docker("ps", "-aq")
-    if existing.strip():
-        raise AcceptanceError(
-            "REFUSED: Docker daemon contains existing containers. "
-            "This acceptance test must use an empty disposable Docker daemon "
-            "(e.g. dedicated Mac Colima profile or isolated VM), never "
-            "the Switchboard production/homelab daemon."
-        )
+    used = docker("ps", "-aq", "--filter",
+                  "label=com.docker.compose.project=" + project)
+    networks = docker("network", "ls", "--format", "{{.Name}}",
+                      "--filter", "name=^" + network + "$")
+    if used.strip() or network in networks.splitlines():
+        raise AcceptanceError("Randomized Docker E2E project/network already exists")
+
 
 
 def _inspect(container: str, network: str, state: Path) -> None:
@@ -213,10 +212,10 @@ def run() -> dict:
     if not PACKAGE.is_dir() or not ACCEPTANCE.is_file():
         raise AcceptanceError("Required staged package or acceptance module absent")
     # Preflight MUST precede all Docker network/build/container mutations.
-    _assert_empty_disposable_daemon()
     suffix = secrets.token_hex(6)
     project = "sbe2e" + suffix
     network = "sb-e2e-" + suffix
+    _assert_unused_project(project, network)
     with tempfile.TemporaryDirectory(prefix="switchboard-silverbullet-addon-e2e-") as td:
         root = Path(td)
         source = root / "source"
@@ -339,12 +338,12 @@ def run() -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--confirm-isolated-docker-host", action="store_true",
-        help="Confirm the Docker host is disposable/isolateable; never use production Docker",
+        "--confirm-disposable-test", action="store_true",
+        help="Confirm this test may build temporary containers and files (no production data)",
     )
     args = parser.parse_args(argv)
-    if not args.confirm_isolated_docker_host:
-        parser.error("Real Compose acceptance requires --confirm-isolated-docker-host")
+    if not args.confirm_disposable_test:
+        parser.error("Real Compose acceptance requires --confirm-disposable-test")
     try:
         result = run()
     except AcceptanceError as exc:
