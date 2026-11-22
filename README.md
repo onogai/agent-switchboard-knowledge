@@ -14,11 +14,20 @@ This repository is independent of the Switchboard Core codebase. It owns its own
 
 ## Install
 
-On a host with an initialized **portable** Switchboard, install from this repository using the host's `./switchboard addon` command. The installer provisions `addons/<instance>/state/space` and private credentials, launches both containers on the private add-on network and discovers new MCP tools in review. **Approve and grant access manually** after acceptance.
+On a host with an initialized **portable** Switchboard, install from this repository using `./switchboard addon`. With a Core version supporting the explicit `--target production` option, the same clean add-on can instead join the existing `switchboard-production` network without modifying old services. The installer provisions `addons/<instance>/state/space` and private credentials, launches both containers on the private add-on network and discovers new MCP tools in review. **Approve and grant access manually** after acceptance.
 
 ```bash
 ./switchboard addon https://github.com/onogai/agent-switchboard-silverbullet.git --name silverbullet
 ./switchboard addons
+```
+
+For the separately deployed production Core/Manager (only with Core support for
+`--target production`):
+
+```bash
+./switchboard addon https://github.com/onogai/agent-switchboard-silverbullet.git --name silverbullet-new --target production
+./switchboard addons
+./switchboard addon logs silverbullet-new
 ```
 
 A private repository requires the Docker host to have Git credentials/SSH access; an HTTPS clone from a private repository may require prior non-interactive authentication.
@@ -27,11 +36,11 @@ A private repository requires the Docker host to have Git credentials/SSH access
 
 ```bash
 python -m unittest discover -s tests -v
-# On a SEPARATE disposable Docker daemon ONLY (NOT the production host):
-python -m scripts.silverbullet_full_addon_compose_e2e --confirm-isolated-docker-host
+# On a Docker host that may already have other running projects:
+python -m scripts.silverbullet_full_addon_compose_e2e --confirm-disposable-test
 ```
 
-The destructive E2E refuses to run on a Docker daemon with pre-existing containers. It creates an internal network, disposable state and credentials, verifies the seven MCP tools and filesystem read/write behavior, then cleans up only its own resources.
+This E2E accepts a shared Docker daemon but refuses conflicts with its randomly generated project/network. It creates a private internal network, disposable state and credentials, verifies the seven MCP tools and filesystem read/write behavior, then cleans up only its own resources. It never mounts or changes an existing production Markdown space, Registry or containers. Expect a temporary CPU/memory/build load.
 
 ## Data ownership and migration
 

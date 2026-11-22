@@ -9,19 +9,31 @@ from scripts import silverbullet_full_addon_compose_e2e as e2e
 
 
 class FullAddonE2EDriverTests(unittest.TestCase):
-    def test_refuses_to_run_without_isolated_docker_confirmation(self):
+    def test_refuses_to_run_without_disposable_test_confirmation(self):
         with patch.object(e2e, "docker") as docker, self.assertRaises(SystemExit) as error:
             e2e.main([])
         self.assertEqual(error.exception.code, 2)
         docker.assert_not_called()
 
-    def test_refuses_shared_or_production_daemon_before_any_mutation(self):
-        with patch.object(e2e, "docker", return_value="existing-container-id") as docker:
-            with self.assertRaisesRegex(
-                e2e.AcceptanceError, "REFUSED: Docker daemon contains existing containers"
-            ):
-                e2e.run()
-        docker.assert_called_once_with("ps", "-aq")
+    def test_generated_project_collision_is_rejected_without_mutations(self):
+        with patch.object(e2e, "docker", return_value="preexisting-project-container") as docker:
+            with self.assertRaisesRegex(e2e.AcceptanceError, "already exists"):
+                e2e._assert_unused_project("sbe2e-known", "sb-e2e-known")
+        self.assertEqual(docker.call_count, 2)
+        self.assertTrue(all(call.args[0:2] != ("network", "create")
+                            for call in docker.call_args_list))
+
+    def test_preexisting_unrelated_containers_are_not_touched(self):
+        observed = []
+        def docker(*args, **kwargs):
+            observed.append(args)
+            return ""
+        with patch.object(e2e, "docker", side_effect=docker):
+            e2e._assert_unused_project("sbe2e-new", "sb-e2e-new")
+        self.assertTrue(any(x[:2] == ("ps", "-aq") for x in observed))
+        self.assertTrue(all(x[:2] != ("ps", "-a") for x in observed))
+        self.assertTrue(any("label=com.docker.compose.project=sbe2e-new" in x
+                            for x in observed))
 
     def test_reports_safe_diagnostic_phase_without_raw_subprocess_output(self):
         def fake_docker(*args, **kwargs):
