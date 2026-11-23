@@ -98,7 +98,8 @@ class FullAddonE2EDriverTests(unittest.TestCase):
                 }],
             }
             with patch.object(e2e, "docker", return_value=json.dumps([safe])):
-                e2e._inspect("disposable-container", "sb-e2e-private", state)
+                e2e._inspect("disposable-container", "sb-e2e-private", state,
+                                 readonly_targets=frozenset({"/knowledge"}))
             for mutation in (
                 lambda d: d["HostConfig"].update(PortBindings={"3000/tcp": [{}]}),
                 lambda d: d["HostConfig"].update(Privileged=True),
@@ -111,7 +112,8 @@ class FullAddonE2EDriverTests(unittest.TestCase):
                 mutation(candidate)
                 with patch.object(e2e, "docker", return_value=json.dumps([candidate])):
                     with self.assertRaises(e2e.AcceptanceError):
-                        e2e._inspect("disposable-container", "sb-e2e-private", state)
+                        e2e._inspect("disposable-container", "sb-e2e-private", state,
+                                 readonly_targets=frozenset({"/knowledge"}))
 
     def test_staging_copies_only_allowlisted_files_without_local_state(self):
         with tempfile.TemporaryDirectory() as td:
@@ -158,6 +160,102 @@ class FullAddonE2EDriverTests(unittest.TestCase):
             with patch.object(e2e, "PACKAGE", package):
                 with self.assertRaisesRegex(e2e.AcceptanceError, "unsafe"):
                     e2e._stage_package(Path(td) / "staged")
+
+    def test_bootstrap_failure_extracts_only_allowlisted_phase(self):
+        import subprocess
+        unsafe = "WARNING secret_password=DO_NOT_SHOW\\n"
+        safe = "SilverBullet bootstrap phase: admin-login\\n"
+        failed = "SilverBullet bootstrap failed at configure-agent-permissions: KnowledgeError\\n"
+        result = subprocess.CompletedProcess(
+            args=["docker", "logs"], returncode=0, stdout=unsafe + safe + failed,
+            stderr="token=DO_NOT_SHOW",
+        )
+        with patch.object(e2e.subprocess, "run", return_value=result):
+            msg = e2e._bootstrap_failure("disposable-container")
+        self.assertIn("configure-agent-permissions", msg)
+        self.assertNotIn("DO_NOT_SHOW", msg)
+
+    def test_compose_failure_classification_never_echoes_daemon_stderr(self):
+        import subprocess
+        failed = subprocess.CompletedProcess(
+            args=["docker", "compose"], returncode=1,
+            stdout="INTERNAL_SECRET_DO_NOT_ECHO",
+            stderr="Error: dependency failed to start; secret=INTERNAL_SECRET_DO_NOT_ECHO",
+        )
+        with patch.object(e2e.subprocess, "run", return_value=failed):
+            with self.assertRaises(e2e.AcceptanceError) as error:
+                e2e.command("docker", "compose", "up")
+        self.assertIn("Compose dependency could not start", str(error.exception))
+        self.assertNotIn("INTERNAL_SECRET_DO_NOT_ECHO", str(error.exception))
+
+    def test_adapter_start_has_no_deps_after_bootstrap_verification(self):
+        source = (Path(__file__).resolve().parents[1] /
+                  "scripts" / "silverbullet_full_addon_compose_e2e.py").read_text()
+        self.assertIn('"--no-deps", "silverbulletadapter"', source)
+        self.assertIn('if init_state.get("ExitCode") != 0:', source)
+
+    def test_mcp_acceptance_diagnostic_is_specific_but_private(self):
+        import subprocess
+        failed = subprocess.CompletedProcess(
+            args=["docker", "exec", "-i"], returncode=2,
+            stdout="PRIVATE_PAGE_CONTENT\nE2E_ACCEPT_FAIL:resolve-feedback:ValueError\n",
+            stderr="PRIVATE_TOKEN_DO_NOT_SHOW",
+        )
+        with patch.object(e2e.subprocess, "run", return_value=failed):
+            with self.assertRaises(e2e.AcceptanceError) as err:
+                e2e.command("docker", "exec", "-i", "disposable-container", "python", "-")
+        self.assertIn("MCP acceptance failed at resolve-feedback: ValueError",
+                      str(err.exception))
+        self.assertNotIn("PRIVATE_PAGE_CONTENT", str(err.exception))
+        self.assertNotIn("PRIVATE_TOKEN", str(err.exception))
+
+    def test_mcp_acceptance_diagnostic_ignores_unknown_marker(self):
+        import subprocess
+        failed = subprocess.CompletedProcess(
+            args=["docker", "exec", "-i"], returncode=2,
+            stdout="E2E_ACCEPT_FAIL:invalid-phase:Exception\n",
+            stderr="secret",
+        )
+        with patch.object(e2e.subprocess, "run", return_value=failed):
+            with self.assertRaises(e2e.AcceptanceError) as err:
+                e2e.command("docker", "exec", "-i", "disposable-container", "python", "-")
+        self.assertNotIn("invalid-phase", str(err.exception))
+
+    def test_bootstrap_failure_extracts_allowlisted_reason_without_raw_logs(self):
+        import subprocess
+        safe = ("SilverBullet bootstrap phase: admin-login\n"
+                "SilverBullet bootstrap failed at admin-login: "
+                "KnowledgeError [admin-login-refused]\n")
+        raw = "private-password=WONT_BE_PRINTED\n" + safe
+        result = subprocess.CompletedProcess(
+            args=["docker", "logs"], returncode=0, stdout=raw, stderr="",
+        )
+        with patch.object(e2e.subprocess, "run", return_value=result):
+            msg = e2e._bootstrap_failure("disposable-only")
+        self.assertIn("reason=admin-login-refused", msg)
+        self.assertNotIn("WONT_BE_PRINTED", msg)
+
+    def test_installer_wait_reports_failed_bootstrap_phase_privately(self):
+        with patch.object(e2e, "_compose", return_value="disposable-bootstrap"), \
+             patch.object(e2e, "_inspect_bootstrap_exit", return_value=("exited", 1)), \
+             patch.object(e2e, "_bootstrap_failure",
+                          return_value="Bootstrap failed during admin-login (KnowledgeError)"):
+            err = e2e._installer_wait_failure(
+                Path("/tmp/disposable-source"), Path("/tmp/disposable-env"),
+                "sbe2e-only", "old-bootstrap", e2e.AcceptanceError("docker exited with status 1"),
+            )
+        self.assertIn("admin-login", str(err))
+        self.assertNotIn("token", str(err).casefold())
+
+    def test_installer_wait_distinguishes_successful_bootstrap_from_compose_error(self):
+        with patch.object(e2e, "_compose", return_value="disposable-bootstrap"), \
+             patch.object(e2e, "_inspect_bootstrap_exit", return_value=("exited", 0)):
+            err = e2e._installer_wait_failure(
+                Path("/tmp/disposable-source"), Path("/tmp/disposable-env"),
+                "sbe2e-only", "old-bootstrap", e2e.AcceptanceError("docker exited with status 1"),
+            )
+        self.assertIn("Compose lifecycle/--wait failure", str(err))
+        self.assertIn("exit_code=0", str(err))
 
     def test_command_errors_never_echo_credentials(self):
         import subprocess

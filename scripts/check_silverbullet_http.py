@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import json
 from pathlib import Path
+from typing import Callable
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -21,6 +22,8 @@ EXPECTED = {
     "notes_search", "notes_read_page", "notes_capture",
     "notes_create_wiki_page", "notes_update_page",
     "notes_list_agent_feedback", "notes_resolve_agent_feedback",
+    "notes_overview", "notes_search_status", "notes_search_ranked",
+    "notes_related_pages",
 }
 
 
@@ -49,9 +52,15 @@ def _endpoint(url: str) -> None:
 
 
 async def accept(url: str, *, read_page: str | None = None,
-                 write_test: bool = False, bearer_token: str | None = None) -> dict:
+                 write_test: bool = False, bearer_token: str | None = None,
+                 on_step: Callable[[str], None] | None = None) -> dict:
     """Connect to real MCP transport; never print API tokens or page contents."""
     _endpoint(url)
+    def step(name: str) -> None:
+        if on_step is not None:
+            on_step(name)
+
+    step("connect")
     summary = {
         "catalog_checked": False,
         "read_checked": False,
@@ -61,12 +70,14 @@ async def accept(url: str, *, read_page: str | None = None,
         "production_registry_changed": False,
     }
     async with Client(url, timeout=20, auth=bearer_token) as client:
+        step("catalog")
         names = {tool.name for tool in await client.list_tools()}
         if names != EXPECTED:
-            raise ValueError("Live MCP catalog differs from the required seven tools")
+            raise ValueError("Live MCP catalog differs from the required eleven tools")
         summary["catalog_checked"] = True
 
         if read_page:
+            step("read-sentinel")
             existing = _result(await client.call_tool(
                 "notes_read_page", {"page": read_page}
             ))
@@ -77,6 +88,7 @@ async def accept(url: str, *, read_page: str | None = None,
             summary["read_checked"] = True
 
         if write_test:
+            step("create-wiki")
             nonce = uuid4().hex[:16]
             page = "Wiki/MCP-Acceptance-" + nonce
             body = "# MCP acceptance " + nonce + "\n\n"
@@ -88,16 +100,19 @@ async def accept(url: str, *, read_page: str | None = None,
             if created.get("page") != page:
                 raise ValueError("Create page returned the wrong page")
             summary["disposable_pages_created"] += 1
+            step("read-created")
             read = _result(await client.call_tool(
                 "notes_read_page", {"page": page}
             ))
             if read.get("content") != body or not read.get("etag"):
                 raise ValueError("Created page was not readable with an ETag")
+            step("filesystem-search")
             found = _result(await client.call_tool(
                 "notes_search", {"query": nonce}
             ))
             if page not in [row.get("page") for row in found.get("results", [])]:
                 raise ValueError("New page was not indexed by filesystem search")
+            step("list-feedback")
             feedback = _result(await client.call_tool(
                 "notes_list_agent_feedback", {"limit": 100}
             ))
@@ -105,6 +120,7 @@ async def accept(url: str, *, read_page: str | None = None,
                         if item.get("page") == page]
             if len(matching) != 1 or not matching[0].get("id"):
                 raise ValueError("New page feedback was not listed")
+            step("resolve-feedback")
             resolved = _result(await client.call_tool(
                 "notes_resolve_agent_feedback",
                 {"page": page, "feedback_id": matching[0]["id"], "etag": read["etag"]},
@@ -113,12 +129,14 @@ async def accept(url: str, *, read_page: str | None = None,
                 raise ValueError("Feedback resolve returned no new ETag")
 
             new_body = "# MCP acceptance " + nonce + "\n\nUpdated via MCP.\n"
+            step("update-page")
             updated = _result(await client.call_tool(
                 "notes_update_page",
                 {"page": page, "content": new_body, "etag": resolved["etag"]},
             ))
             if updated.get("page") != page:
                 raise ValueError("Update returned the wrong page")
+            step("reject-stale-etag")
             stale = await client.call_tool(
                 "notes_update_page",
                 {"page": page, "content": "# STALE WRITE\n", "etag": read["etag"]},
@@ -126,6 +144,7 @@ async def accept(url: str, *, read_page: str | None = None,
             )
             if not stale.is_error:
                 raise ValueError("Stale ETag write was incorrectly accepted")
+            step("read-after-stale")
             final = _result(await client.call_tool(
                 "notes_read_page", {"page": page}
             ))
@@ -133,6 +152,7 @@ async def accept(url: str, *, read_page: str | None = None,
                 raise ValueError("Stale write changed the page unexpectedly")
             summary["etag_checked"] = True
 
+            step("capture-note")
             note = _result(await client.call_tool(
                 "notes_capture",
                 {"title": "MCP acceptance " + nonce,
@@ -144,6 +164,7 @@ async def accept(url: str, *, read_page: str | None = None,
             summary["read_checked"] = True
             summary["write_checked"] = True
 
+    step("complete")
     return summary
 
 

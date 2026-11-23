@@ -17,6 +17,7 @@ from fastmcp.server.auth import AccessToken, TokenVerifier
 from mcp.types import ToolAnnotations
 
 from .knowledge import KnowledgeClient, KnowledgeError, list_feedback, search_pages
+from .v3_api import overview as v3_overview, search_status as v3_search_status, find as v3_find, related as v3_related
 
 
 class PrivateBearerVerifier(TokenVerifier):
@@ -71,6 +72,26 @@ async def notes_search(query: str, limit: int = 10) -> dict:
     return await asyncio.to_thread(search_pages, client.root, query, limit)
 
 
+async def notes_overview() -> dict:
+    """Discover available folders, top-level pages, skills and tags via SilverBullet 3.0 /.help. Prefer this before searching when unfamiliar with the knowledge space."""
+    return await asyncio.to_thread(v3_overview)
+
+
+async def notes_search_status() -> dict:
+    """Check which SilverBullet 3.0 search modes are ready. Semantic mode is optional and can be disabled or still indexing."""
+    return await asyncio.to_thread(v3_search_status)
+
+
+async def notes_search_ranked(query: str, mode: str = "words", limit: int = 10) -> dict:
+    """Ranked server-index search. 'words' for exact topics, 'phrase' for a quotation, 'natural' for semantic intent (only when enabled). Results may be partial; inspect notice and read source pages."""
+    return await asyncio.to_thread(v3_find, query, mode, limit)
+
+
+async def notes_related_pages(page: str, limit: int = 5) -> dict:
+    """Find pages semantically related to a known page (requires enabled, ready semantic search). Read matching pages before using them as facts."""
+    return await asyncio.to_thread(v3_related, page, limit)
+
+
 async def notes_read_page(page: str) -> dict:
     """Read the complete Markdown of a SilverBullet page and its current ETag. Use after notes_search or before any update or feedback resolution. Pass page path without optional .md."""
     return await asyncio.to_thread(KnowledgeClient.from_environment().read_page, page)
@@ -116,11 +137,12 @@ async def notes_resolve_agent_feedback(page: str, feedback_id: str, etag: str) -
     return await asyncio.to_thread(client.resolve_feedback, page, feedback_id, etag)
 
 
-_READ_ONLY = {"notes_search", "notes_read_page", "notes_list_agent_feedback"}
+_READ_ONLY = {"notes_search", "notes_read_page", "notes_list_agent_feedback", "notes_overview", "notes_search_status", "notes_search_ranked", "notes_related_pages"}
 _DESTRUCTIVE = {"notes_update_page", "notes_resolve_agent_feedback"}
 
 for _tool in (
-    notes_search, notes_read_page, notes_capture,
+    notes_search, notes_read_page, notes_overview, notes_search_status,
+    notes_search_ranked, notes_related_pages, notes_capture,
     notes_create_wiki_page, notes_update_page,
     notes_list_agent_feedback, notes_resolve_agent_feedback,
 ):

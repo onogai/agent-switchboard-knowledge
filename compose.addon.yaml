@@ -1,21 +1,49 @@
 services:
   silverbulletapp:
-    image: ghcr.io/silverbulletmd/silverbullet:2.12.1-slim
+    # SilverBullet 3.0 edge slim, pinned to immutable multi-arch manifest (2026-11-22).
+    image: ghcr.io/silverbulletmd/silverbullet@sha256:f672bf25b2b32f7bf4eacd67f778bf1e6fc3a56d0d196a91fd93c91ea8765aab
     restart: unless-stopped
     user: "${HOST_UID:?}:${HOST_GID:?}"
-    command: ["--single"]
     environment:
       SB_FOLDER: /data
-      SB_RUNTIME_API: "0"
-      SB_USER: "admin:${SWITCHBOARD_ADDON_SECRET_PASSWORD:?}"
-      SB_AUTH_TOKEN: "${SWITCHBOARD_ADDON_SECRET_TOKEN:?}"
+      SB_UPDATE_CHECK: "0"
+      SB_SHELL_BACKEND: "off"
+      SB_MCP: "0"
+      SB_DISABLE_SERVICE_WORKER: "1"
     volumes:
       - type: bind
-        source: "${SWITCHBOARD_ADDON_STATE:?}/space"
+        source: "${SWITCHBOARD_ADDON_STATE:?}/server"
         target: /data
+      - type: bind
+        source: "${SWITCHBOARD_ADDON_STATE:?}/space"
+        target: /knowledge
     networks:
       addons:
         aliases: ["addon-${SWITCHBOARD_ADDON_INSTANCE}-silverbulletapp"]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  silverbulletbootstrap:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "silverbullet_mcp.bootstrap"]
+    restart: "no"
+    user: "${HOST_UID:?}:${HOST_GID:?}"
+    environment:
+      HOME: /tmp
+      KNOWLEDGE_BASE_URL: "http://addon-${SWITCHBOARD_ADDON_INSTANCE}-silverbulletapp:3000"
+      SILVERBULLET_BOOTSTRAP_SECRETS_DIR: /run/addon-secrets
+    volumes:
+      - type: bind
+        source: "${SWITCHBOARD_ADDON_STATE:?}/secrets"
+        target: /run/addon-secrets
+    networks:
+      addons:
+        aliases: ["addon-${SWITCHBOARD_ADDON_INSTANCE}-silverbulletbootstrap"]
+    depends_on: [silverbulletapp]
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -52,7 +80,9 @@ services:
     networks:
       addons:
         aliases: ["addon-${SWITCHBOARD_ADDON_INSTANCE}"]
-    depends_on: [silverbulletapp]
+    depends_on:
+      silverbulletbootstrap:
+        condition: service_completed_successfully
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]

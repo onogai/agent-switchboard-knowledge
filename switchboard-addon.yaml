@@ -3,9 +3,9 @@ id: silverbullet
 name: SilverBullet Knowledge
 compose: compose.addon.yaml
 service: silverbulletadapter
-services: silverbulletapp,silverbulletadapter
-state_dirs: space
-secret_files: token,password,mcptoken
+services: silverbulletapp,silverbulletbootstrap,silverbulletadapter
+state_dirs: server,space
+secret_files: token,password,agentpass,mcptoken
 mcp_auth: bearer
 mcp_port: 8773
 mcp_path: /mcp

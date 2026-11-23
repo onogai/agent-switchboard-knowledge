@@ -163,6 +163,11 @@ class KnowledgeClient:
     def _request(self, method: str, path: str, *, content: str | None = None,
                  etag: str | None = None, create: bool = False) -> httpx.Response:
         headers = {"Authorization": f"Bearer {self._token()}", "X-Sync-Mode": "true"}
+        # SilverBullet 3 uses representation-specific ETags. Ordinary text GET
+        # returns sha256-typed (browser cache), but Accept: octet-stream returns
+        # sha256, the content revision accepted by If-Match on PUT.
+        if method == "GET":
+            headers["Accept"] = "application/octet-stream"
         if etag is not None:
             headers["If-Match"] = etag
         if create:
