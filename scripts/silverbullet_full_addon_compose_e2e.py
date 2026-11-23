@@ -128,6 +128,38 @@ def _bootstrap_failure(container: str) -> str:
     return "Bootstrap exited unsuccessfully (no safe diagnostic marker found)"
 
 
+def _inspect_bootstrap_exit(container: str) -> tuple[str, int | None]:
+    """Report only the state and exit code of this disposable bootstrap."""
+    try:
+        info = json.loads(docker("inspect", container))[0]["State"]
+    except (AcceptanceError, ValueError, IndexError, KeyError, TypeError):
+        return ("unknown", None)
+    state = info.get("Status")
+    exit_code = info.get("ExitCode")
+    return (state if state in {"running", "exited", "created", "dead", "restarting"} else "unknown",
+            exit_code if type(exit_code) is int else None)
+
+
+def _installer_wait_failure(source: Path, env_path: Path, project: str,
+                            bootstrap_id: str, original: AcceptanceError) -> AcceptanceError:
+    """Distinguish a failed second bootstrap from Compose --wait orchestration.
+
+    Do not print raw Compose output or Docker logs; the bootstrap emits
+    allowlisted phase labels that carry no page content or credentials.
+    """
+    current = _compose(source, env_path, project, "ps", "-a", "-q",
+                       "silverbulletbootstrap")
+    if not current:
+        return AcceptanceError(f"{original}; bootstrap container missing")
+    state, code = _inspect_bootstrap_exit(current)
+    if state == "exited" and code != 0:
+        return AcceptanceError(f"{original}; {_bootstrap_failure(current)}")
+    return AcceptanceError(
+        f"{original}; bootstrap state={state}, exit_code={code}; "
+        "Compose lifecycle/--wait failure without failed bootstrap"
+    )
+
+
 def _probe(container: str) -> None:
     code = """
 import asyncio
@@ -476,9 +508,14 @@ def run() -> dict:
             # user tries installing the add-on through the production CLI.
             phase = "verify Switchboard installer-style Compose up --wait"
             print("E2E: " + phase, flush=True)
-            _compose(source, env_path, project, "up", "-d", "--no-build",
-                     "--wait", "silverbulletapp", "silverbulletbootstrap",
-                     "silverbulletadapter", timeout_s=240)
+            try:
+                _compose(source, env_path, project, "up", "-d", "--no-build",
+                         "--wait", "silverbulletapp", "silverbulletbootstrap",
+                         "silverbulletadapter", timeout_s=240)
+            except AcceptanceError as original:
+                raise _installer_wait_failure(
+                    source, env_path, project, init, original
+                ) from original
             phase = "verify MCP remains available after installer-style startup"
             _probe(mcp)
             return {
