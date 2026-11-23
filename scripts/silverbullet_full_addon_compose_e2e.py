@@ -33,6 +33,25 @@ class AcceptanceError(RuntimeError):
     pass
 
 
+def _safe_docker_failure(stderr: str) -> str:
+    """Classify known Compose/daemon failures without leaking stderr or secrets."""
+    message = stderr.casefold()
+    patterns = (
+        ("dependency failed to start", "Compose dependency could not start"),
+        ("didn't complete successfully", "one-shot dependency exited unsuccessfully"),
+        ("invalid mount config", "Docker rejected a bind mount"),
+        ("not a directory", "bind mount source/target type mismatch"),
+        ("permission denied", "Docker or mounted file access denied"),
+        ("no such image", "required Docker image is unavailable"),
+        ("failed to create task", "container runtime failed to create task"),
+        ("unknown flag", "Docker Compose rejected an option"),
+    )
+    for substring, label in patterns:
+        if substring in message:
+            return " (" + label + ")"
+    return ""
+
+
 def command(*args: str, cwd: Path | None = None, env: dict | None = None,
             input_text: str | None = None,
             timeout_s: int = 180) -> str:
@@ -47,7 +66,10 @@ def command(*args: str, cwd: Path | None = None, env: dict | None = None,
         raise AcceptanceError(f"{args[0]} exceeded {timeout_s}s" if isinstance(exc, subprocess.TimeoutExpired)
                               else f"{args[0]} failed: {type(exc).__name__}") from exc
     if result.returncode:
-        raise AcceptanceError(f"{args[0]} exited with status {result.returncode}")
+        # Never surface raw daemon/Compose stderr: it may include secrets from
+        # interpolation or a failing command's arguments.
+        diagnostic = _safe_docker_failure(result.stderr) if args[0] == "docker" else ""
+        raise AcceptanceError(f"{args[0]} exited with status {result.returncode}{diagnostic}")
     return result.stdout.strip()
 
 
