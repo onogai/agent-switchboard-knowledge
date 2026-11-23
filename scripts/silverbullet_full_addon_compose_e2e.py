@@ -82,6 +82,46 @@ asyncio.run(main())
     docker("exec", "-i", container, "python", "-", input_text=code)
 
 
+def _v3_search_probe(container: str) -> None:
+    """Verify actual SilverBullet 3 discovery and server-side full-text index."""
+    code = """
+import asyncio, os, json
+from pathlib import Path
+from fastmcp import Client
+
+def decode(result):
+    if result.is_error:
+        raise ValueError("SilverBullet 3 MCP call failed")
+    data = result.structured_content
+    if data is None:
+        data = json.loads(result.content[0].text)
+    if isinstance(data, dict) and set(data) == {"result"}:
+        data = data["result"]
+    return data
+
+async def main():
+    token = Path(os.environ["SILVERBULLET_MCP_TOKEN_FILE"]).read_text().strip()
+    async with Client("http://127.0.0.1:8773/mcp", timeout=25, auth=token) as client:
+        overview = decode(await client.call_tool("notes_overview", {}))
+        assert overview["version"] == 1
+        assert "outline" in overview
+        status = decode(await client.call_tool("notes_search_status", {}))
+        assert isinstance(status["capabilities"], dict)
+        match = None
+        for _ in range(15):
+            result = decode(await client.call_tool("notes_search_ranked", {
+                "query": "Disposable add-on acceptance", "mode": "phrase", "limit": 10,
+            }))
+            if any(row["page"] == "Wiki/E2E-Sentinel" for row in result["items"]):
+                match = result
+                break
+            await asyncio.sleep(1)
+        assert match is not None, "Indexed search missed disposable knowledge"
+asyncio.run(main())
+"""
+    docker("exec", "-i", container, "python", "-", input_text=code)
+
+
 def _mcp_auth_probe(container: str) -> None:
     """Real HTTP 401 for missing/incorrect MCP service credential."""
     code = """
@@ -309,6 +349,8 @@ def run() -> dict:
             _mcp_auth_probe(mcp)
             phase = "authenticate real SilverBullet filesystem API"
             _api_probe(mcp)
+            phase = "verify SilverBullet 3 overview and indexed full-text search"
+            _v3_search_probe(mcp)
             phase = "exercise eleven MCP tools, writes, feedback and ETags"
             result = _accept(mcp)
             phase = "verify persistent disposable Markdown writes"
