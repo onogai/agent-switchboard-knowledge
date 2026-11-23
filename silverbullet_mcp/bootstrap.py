@@ -22,6 +22,7 @@ SPACE_FOLDER = "/knowledge"
 TOKEN_NAME = "switchboard-addon"
 BASE = os.environ.get("KNOWLEDGE_BASE_URL", "").rstrip("/")
 TIMEOUT_SECONDS = 90
+BOOTSTRAP_PHASE = "preflight"
 
 
 def _secret(directory: Path, name: str) -> str:
@@ -184,7 +185,15 @@ def _configure_token(http: httpx.Client, token_path: Path) -> None:
         raise KnowledgeError("Minted agent API token cannot reach the Knowledge space.")
 
 
+def _phase(stage: str) -> None:
+    global BOOTSTRAP_PHASE
+    BOOTSTRAP_PHASE = stage
+    # Phase labels are fixed strings and never include credentials or URL data.
+    print(f"SilverBullet bootstrap phase: {stage}", flush=True)
+
+
 def run() -> None:
+    _phase("preflight")
     if not BASE.startswith("http://addon-") or not BASE.endswith("-silverbulletapp:3000"):
         raise KnowledgeError("Bootstrap requires the private add-on SilverBullet endpoint.")
     directory = Path(os.environ.get("SILVERBULLET_BOOTSTRAP_SECRETS_DIR",
@@ -196,8 +205,10 @@ def run() -> None:
     _secret(directory, "token")  # installer-owned placeholder or server-minted token
     with httpx.Client(base_url=BASE, timeout=5, follow_redirects=False,
                       trust_env=False) as http:
+        _phase("wait-for-server")
         needs_setup = _wait_for_app(http)
         if needs_setup:
+            _phase("create-admin-and-space")
             response = http.post("/.setup/api/complete", json={
                 "adminUsername": ADMIN, "adminPassword": adminpass,
                 "space": {"name": SPACE, "prefix": "/",
@@ -205,9 +216,13 @@ def run() -> None:
                           "revisions": "unmanaged", "starter": {"type": "none"}},
             })
             _expect(response)
+        _phase("admin-login")
         _login(http, adminpass)
+        _phase("configure-agent-permissions")
         _configure_agent(http, agentpass)
+        _phase("issue-and-verify-api-token")
         _configure_token(http, directory / "token")
+        _phase("complete")
 
 
 if __name__ == "__main__":
@@ -215,6 +230,6 @@ if __name__ == "__main__":
         run()
     except (KnowledgeError, httpx.HTTPError, OSError) as error:
         # Never print HTTP response bodies, request headers, or credentials.
-        print(f"SilverBullet bootstrap failed: {type(error).__name__}", flush=True)
+        print(f"SilverBullet bootstrap failed at {BOOTSTRAP_PHASE}: {type(error).__name__}", flush=True)
         raise SystemExit(1)
     print("SilverBullet bootstrap complete (private space, non-admin MCP token).", flush=True)
