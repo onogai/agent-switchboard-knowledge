@@ -98,7 +98,8 @@ class FullAddonE2EDriverTests(unittest.TestCase):
                 }],
             }
             with patch.object(e2e, "docker", return_value=json.dumps([safe])):
-                e2e._inspect("disposable-container", "sb-e2e-private", state)
+                e2e._inspect("disposable-container", "sb-e2e-private", state,
+                                 readonly_targets=frozenset({"/knowledge"}))
             for mutation in (
                 lambda d: d["HostConfig"].update(PortBindings={"3000/tcp": [{}]}),
                 lambda d: d["HostConfig"].update(Privileged=True),
@@ -111,7 +112,8 @@ class FullAddonE2EDriverTests(unittest.TestCase):
                 mutation(candidate)
                 with patch.object(e2e, "docker", return_value=json.dumps([candidate])):
                     with self.assertRaises(e2e.AcceptanceError):
-                        e2e._inspect("disposable-container", "sb-e2e-private", state)
+                        e2e._inspect("disposable-container", "sb-e2e-private", state,
+                                 readonly_targets=frozenset({"/knowledge"}))
 
     def test_staging_copies_only_allowlisted_files_without_local_state(self):
         with tempfile.TemporaryDirectory() as td:
