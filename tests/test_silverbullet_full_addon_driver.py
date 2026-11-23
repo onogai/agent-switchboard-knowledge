@@ -223,10 +223,10 @@ class FullAddonE2EDriverTests(unittest.TestCase):
 
     def test_bootstrap_failure_extracts_allowlisted_reason_without_raw_logs(self):
         import subprocess
-        safe = ("SilverBullet bootstrap phase: admin-login\\n"
+        safe = ("SilverBullet bootstrap phase: admin-login\n"
                 "SilverBullet bootstrap failed at admin-login: "
-                "KnowledgeError [admin-login-refused]\\n")
-        raw = "private-password=WONT_BE_PRINTED\\n" + safe
+                "KnowledgeError [admin-login-refused]\n")
+        raw = "private-password=WONT_BE_PRINTED\n" + safe
         result = subprocess.CompletedProcess(
             args=["docker", "logs"], returncode=0, stdout=raw, stderr="",
         )
