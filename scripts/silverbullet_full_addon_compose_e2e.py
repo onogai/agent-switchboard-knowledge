@@ -470,10 +470,22 @@ def run() -> dict:
             files = list(space.rglob("*.md"))
             if len(files) < 3:
                 raise AcceptanceError("MCP writes not persisted in disposable Markdown space")
+            # The Switchboard host installer uses a single Compose up --wait
+            # for every service, including the completed one-shot bootstrap.
+            # Reproduce that exact lifecycle on disposable data before any
+            # user tries installing the add-on through the production CLI.
+            phase = "verify Switchboard installer-style Compose up --wait"
+            print("E2E: " + phase, flush=True)
+            _compose(source, env_path, project, "up", "-d", "--no-build",
+                     "--wait", "silverbulletapp", "silverbulletbootstrap",
+                     "silverbulletadapter", timeout_s=240)
+            phase = "verify MCP remains available after installer-style startup"
+            _probe(mcp)
             return {
                 "official_silverbullet": "3.0-edge-slim (digest pinned)",
                 "compose_service_count": 3,
                 "bootstrap_complete": True,
+                "installer_style_compose_wait_verified": True,
                 "private_internal_network": True,
                 "host_ports_published": False,
                 "mcp_tools_tested": 11,
