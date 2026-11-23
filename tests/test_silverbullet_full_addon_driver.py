@@ -161,6 +161,20 @@ class FullAddonE2EDriverTests(unittest.TestCase):
                 with self.assertRaisesRegex(e2e.AcceptanceError, "unsafe"):
                     e2e._stage_package(Path(td) / "staged")
 
+    def test_bootstrap_failure_extracts_only_allowlisted_phase(self):
+        import subprocess
+        unsafe = "WARNING secret_password=DO_NOT_SHOW\\n"
+        safe = "SilverBullet bootstrap phase: admin-login\\n"
+        failed = "SilverBullet bootstrap failed at configure-agent-permissions: KnowledgeError\\n"
+        result = subprocess.CompletedProcess(
+            args=["docker", "logs"], returncode=0, stdout=unsafe + safe + failed,
+            stderr="token=DO_NOT_SHOW",
+        )
+        with patch.object(e2e.subprocess, "run", return_value=result):
+            msg = e2e._bootstrap_failure("disposable-container")
+        self.assertIn("configure-agent-permissions", msg)
+        self.assertNotIn("DO_NOT_SHOW", msg)
+
     def test_command_errors_never_echo_credentials(self):
         import subprocess
         failed = subprocess.CompletedProcess(
