@@ -116,11 +116,19 @@ def _bootstrap_failure(container: str) -> str:
         return "Bootstrap exited unsuccessfully (logs unavailable)"
     combined = (proc.stdout + "\n" + proc.stderr)[-24000:]
     markers = re.findall(
-        r"SilverBullet bootstrap failed at ([a-z][a-z-]{0,60}): ([A-Za-z][A-Za-z0-9_]{0,60})",
+        r"SilverBullet bootstrap failed at ([a-z][a-z-]{0,60}): "
+        r"([A-Za-z][A-Za-z0-9_]{0,60}) \\[([a-z][a-z0-9-]{0,60})\\]",
         combined,
     )
     if markers:
-        phase, name = markers[-1]
+        phase, name, reason = markers[-1]
+        return f"Bootstrap failed during {phase} ({name}, reason={reason})"
+    legacy = re.findall(
+        r"SilverBullet bootstrap failed at ([a-z][a-z-]{0,60}): ([A-Za-z][A-Za-z0-9_]{0,60})",
+        combined,
+    )
+    if legacy:
+        phase, name = legacy[-1]
         return f"Bootstrap failed during {phase} ({name})"
     last_phase = re.findall(r"SilverBullet bootstrap phase: ([a-z][a-z-]{0,60})", combined)
     if last_phase:
