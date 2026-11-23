@@ -65,7 +65,7 @@ async def accept(url: str, *, read_page: str | None = None,
     async with Client(url, timeout=20, auth=bearer_token) as client:
         names = {tool.name for tool in await client.list_tools()}
         if names != EXPECTED:
-            raise ValueError("Live MCP catalog differs from the required seven tools")
+            raise ValueError("Live MCP catalog differs from the required eleven tools")
         summary["catalog_checked"] = True
 
         if read_page:
