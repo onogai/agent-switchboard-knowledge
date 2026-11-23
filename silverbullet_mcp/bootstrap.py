@@ -56,13 +56,20 @@ def _wait_for_app(http: httpx.Client) -> bool:
     deadline = time.monotonic() + TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         try:
-            r = http.get("/.setup/api/status")
-            if r.status_code == 200:
+            # In multi-space mode, a guest GET of the Dashboard session
+            # reliably returns 401 (or 200 when already authenticated).
+            # The old setup URL is no longer a server-wide route: a private
+            # root space can return 401/403 instead of 404 for it.
+            # Always test the configured Dashboard FIRST.
+            dashboard = http.get("/.dashboard/api/session")
+            if dashboard.status_code in (200, 401):
+                return False
+            # On a fresh installation the setup router redirects unknown
+            # paths (including the Dashboard) to /.setup/. Only then should
+            # the installer treat the server as not yet provisioned.
+            setup = http.get("/.setup/api/status")
+            if setup.status_code == 200:
                 return True
-            if r.status_code == 404:
-                dashboard = http.get("/.dashboard/api/session")
-                if dashboard.status_code in (200, 401):
-                    return False
         except httpx.RequestError:
             pass
         time.sleep(0.7)
