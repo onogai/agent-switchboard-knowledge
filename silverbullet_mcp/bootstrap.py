@@ -18,7 +18,7 @@ from .knowledge import KnowledgeError
 ADMIN = "admin"
 AGENT = "switchboard-agent"
 SPACE = "Knowledge"
-SPACE_FOLDER = "spaces/knowledge"
+SPACE_FOLDER = "/knowledge"
 TOKEN_NAME = "switchboard-addon"
 BASE = os.environ.get("KNOWLEDGE_BASE_URL", "").rstrip("/")
 TIMEOUT_SECONDS = 90
