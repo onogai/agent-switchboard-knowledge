@@ -194,6 +194,33 @@ class FullAddonE2EDriverTests(unittest.TestCase):
         self.assertIn('"--no-deps", "silverbulletadapter"', source)
         self.assertIn('if init_state.get("ExitCode") != 0:', source)
 
+    def test_mcp_acceptance_diagnostic_is_specific_but_private(self):
+        import subprocess
+        failed = subprocess.CompletedProcess(
+            args=["docker", "exec", "-i"], returncode=2,
+            stdout="PRIVATE_PAGE_CONTENT\\nE2E_ACCEPT_FAIL:resolve-feedback:ValueError\\n",
+            stderr="PRIVATE_TOKEN_DO_NOT_SHOW",
+        )
+        with patch.object(e2e.subprocess, "run", return_value=failed):
+            with self.assertRaises(e2e.AcceptanceError) as err:
+                e2e.command("docker", "exec", "-i", "disposable-container", "python", "-")
+        self.assertIn("MCP acceptance failed at resolve-feedback: ValueError",
+                      str(err.exception))
+        self.assertNotIn("PRIVATE_PAGE_CONTENT", str(err.exception))
+        self.assertNotIn("PRIVATE_TOKEN", str(err.exception))
+
+    def test_mcp_acceptance_diagnostic_ignores_unknown_marker(self):
+        import subprocess
+        failed = subprocess.CompletedProcess(
+            args=["docker", "exec", "-i"], returncode=2,
+            stdout="E2E_ACCEPT_FAIL:invalid-phase:Exception\\n",
+            stderr="secret",
+        )
+        with patch.object(e2e.subprocess, "run", return_value=failed):
+            with self.assertRaises(e2e.AcceptanceError) as err:
+                e2e.command("docker", "exec", "-i", "disposable-container", "python", "-")
+        self.assertNotIn("invalid-phase", str(err.exception))
+
     def test_command_errors_never_echo_credentials(self):
         import subprocess
         failed = subprocess.CompletedProcess(
