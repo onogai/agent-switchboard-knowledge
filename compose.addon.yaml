@@ -30,7 +30,7 @@ services:
       context: .
       dockerfile: Dockerfile
     command: ["python", "-m", "silverbullet_mcp.bootstrap"]
-    restart: on-failure
+    restart: "no"
     user: "${HOST_UID:?}:${HOST_GID:?}"
     environment:
       HOME: /tmp
