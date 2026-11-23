@@ -312,11 +312,14 @@ def run() -> dict:
                 "instance": project, "addon_id": "silverbullet", "network": network,
             })
             phase = "pull pinned SilverBullet 3 slim image"
+            print("E2E: " + phase, flush=True)
             _compose(source, env_path, project, "pull", "silverbulletapp", timeout_s=900)
             phase = "build standalone MCP and bootstrap images"
+            print("E2E: " + phase, flush=True)
             _compose(source, env_path, project, "build", "silverbulletbootstrap",
                      "silverbulletadapter", timeout_s=900)
             phase = "start SilverBullet 3 server"
+            print("E2E: " + phase, flush=True)
             _compose(source, env_path, project, "up", "-d", "--no-build",
                      "silverbulletapp", timeout_s=180)
             sb = _compose(source, env_path, project, "ps", "-q", "silverbulletapp")
@@ -324,6 +327,7 @@ def run() -> dict:
                 raise AcceptanceError("SilverBullet server container was not created")
             _inspect(sb, network, state)
             phase = "start SilverBullet 3 bootstrap"
+            print("E2E: " + phase, flush=True)
             _compose(source, env_path, project, "up", "-d", "--no-build",
                      "silverbulletbootstrap", timeout_s=180)
             init = _compose(source, env_path, project, "ps", "-a", "-q", "silverbulletbootstrap")
@@ -331,6 +335,7 @@ def run() -> dict:
                 raise AcceptanceError("Bootstrap container was not created")
             _inspect(init, network, state)
             phase = "wait for one-shot bootstrap to exit successfully"
+            print("E2E: " + phase, flush=True)
             for attempt in range(210):
                 init_state = json.loads(docker("inspect", init))[0]["State"]
                 if init_state.get("Status") == "exited":
@@ -343,6 +348,7 @@ def run() -> dict:
                     raise AcceptanceError("Bootstrap did not complete within 210 seconds")
                 time.sleep(1)
             phase = "start authenticated adapter after bootstrap"
+            print("E2E: " + phase, flush=True)
             _compose(source, env_path, project, "up", "-d", "--no-build",
                      "silverbulletadapter", timeout_s=180)
             mcp = _compose(source, env_path, project, "ps", "-q", "silverbulletadapter")
@@ -378,6 +384,7 @@ def run() -> dict:
             phase = "authenticate real SilverBullet filesystem API"
             _api_probe(mcp)
             phase = "verify SilverBullet 3 overview and indexed full-text search"
+            print("E2E: " + phase, flush=True)
             _v3_search_probe(mcp)
             phase = "exercise eleven MCP tools, writes, feedback and ETags"
             result = _accept(mcp)
