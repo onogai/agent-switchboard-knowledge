@@ -27,7 +27,9 @@ class FakeV3:
             return httpx.Response(status, json=body, headers=headers or {})
         payload = json.loads(req.content) if req.content else {}
         if path == "/.setup/api/status":
-            return ok({"root": "/data"}) if not self.setup else ok({}, 404)
+            # Once configured this URL is routed through the private root
+            # space and may return 403, not the 404 assumed by old bootstrap.
+            return ok({"root": "/data"}) if not self.setup else ok({}, 403)
         if path == "/.setup/api/complete" and method == "POST":
             assert payload["space"]["folder"] == "/knowledge"
             assert payload["space"]["starter"] == {"type": "none"}
@@ -44,6 +46,8 @@ class FakeV3:
                 return ok({"status": "ok"}, headers={"set-cookie": "session=safe; Path=/; HttpOnly"})
             return ok({"status": "error"})
         if path == "/.dashboard/api/session":
+            if not self.setup:
+                return ok({}, 307, headers={"location": "/.setup/"})
             return ok({"admin": True}, 200) if "session=safe" in req.headers.get("cookie", "") else ok({}, 401)
         if path == "/.help":
             token = req.headers.get("authorization", "").removeprefix("Bearer ")
@@ -124,6 +128,15 @@ class SilverBullet3BootstrapTests(unittest.TestCase):
         self.assertEqual({"role": "write", "runtimeApi": False},
                          space["members"]["switchboard-agent"])
         self.assertEqual("sbt_" + "a"*64, (self.secrets / "token").read_text().strip())
+        bootstrap.run()
+        self.assertEqual(1, self.backend.setup_count)
+        self.assertEqual(1, self.backend.mint_count)
+
+    def test_already_configured_root_space_never_requires_setup_404(self):
+        bootstrap.run()
+        self.assertEqual(1, self.backend.setup_count)
+        # Mimic 3.0: /.setup is private and returns 403, but Dashboard
+        # session is available and returns 401 to unauthenticated clients.
         bootstrap.run()
         self.assertEqual(1, self.backend.setup_count)
         self.assertEqual(1, self.backend.mint_count)
