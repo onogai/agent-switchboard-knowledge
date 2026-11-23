@@ -248,7 +248,7 @@ def run() -> dict:
             f"SWITCHBOARD_ADDON_INSTANCE={project}\n"
             f"SWITCHBOARD_ADDON_STATE={state}\n"
             f"SWITCHBOARD_ADDONS_NETWORK={network}\n"
-            f"HOST_UID={os.getuid()}\nHOST_GID={os.getgid()}\n"
+            f"HOST_UID={os.getuid()}\nHOST_GID={os.getgid()}\n",
             encoding="utf-8",
         )
         env_path.chmod(0o600)
