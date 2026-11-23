@@ -1,7 +1,7 @@
 """Disposable full SilverBullet add-on Compose acceptance on an ISOLATED Docker host.
 
-Tests the actual schema-v2 packaging, two services, private network,
-credential mounts and seven real HTTP MCP tools. NEVER points at production
+Tests the actual schema-v2 packaging, three services, private network,
+automatic bootstrap and eleven real HTTP MCP tools. NEVER points at production
 data, production networks, production Core/Registry or host ports.
 
 Operator-only. Can coexist with other Docker projects: creates and removes
@@ -147,9 +147,9 @@ print("E2E_RESULT:" + json.dumps(result, sort_keys=True))
             if not (data.get("catalog_checked") and data.get("read_checked") and
                     data.get("write_checked") and data.get("etag_checked") and
                     data.get("disposable_pages_created") == 2):
-                raise AcceptanceError("Incomplete seven-tool HTTP acceptance")
+                raise AcceptanceError("Incomplete eleven-tool HTTP acceptance")
             return data
-    raise AcceptanceError("Seven-tool MCP acceptance returned no result")
+    raise AcceptanceError("Eleven-tool MCP acceptance returned no result")
 
 
 def _assert_unused_project(project: str, network: str) -> None:
@@ -224,6 +224,8 @@ def run() -> dict:
         _stage_package(source)
         state = root / "state"
         state.mkdir(mode=0o700)
+        server = state / "server"
+        server.mkdir(mode=0o700)
         space = state / "space"
         space.mkdir(mode=0o700)
         (space / "Wiki").mkdir(mode=0o700)
@@ -235,7 +237,9 @@ def run() -> dict:
         token = secrets.token_urlsafe(48)
         password = secrets.token_urlsafe(48)
         mcp_token = secrets.token_urlsafe(48)
-        for filename, value in (("token", token), ("mcptoken", mcp_token)):
+        for filename, value in (("token", token), ("password", password),
+                                ("agentpass", secrets.token_urlsafe(48)),
+                                ("mcptoken", mcp_token)):
             secret_file = secret_dir / filename
             secret_file.write_text(value + "\n", encoding="utf-8")
             secret_file.chmod(0o600)
@@ -245,9 +249,6 @@ def run() -> dict:
             f"SWITCHBOARD_ADDON_STATE={state}\n"
             f"SWITCHBOARD_ADDONS_NETWORK={network}\n"
             f"HOST_UID={os.getuid()}\nHOST_GID={os.getgid()}\n"
-            f"SWITCHBOARD_ADDON_SECRET_TOKEN={token}\n"
-            f"SWITCHBOARD_ADDON_SECRET_PASSWORD={password}\n"
-            f"SWITCHBOARD_ADDON_SECRET_MCPTOKEN={mcp_token}\n",
             encoding="utf-8",
         )
         env_path.chmod(0o600)
@@ -260,11 +261,13 @@ def run() -> dict:
             rendered = json.loads(_compose(source, env_path, project, "config", "--format", "json"))
             phase = "validate schema-v2 Compose policy"
             validate_v2(rendered, root, {
-                "services": ["silverbulletapp", "silverbulletadapter"], "service": "silverbulletadapter",
+                "services": ["silverbulletapp", "silverbulletbootstrap", "silverbulletadapter"],
+                "service": "silverbulletadapter",
                 "instance": project, "addon_id": "silverbullet", "network": network,
             })
-            phase = "build and start two Compose services"
-            _compose(source, env_path, project, "up", "-d", "--build", "--wait", "silverbulletapp", "silverbulletadapter")
+            phase = "build and start SilverBullet 3, bootstrap and adapter"
+            _compose(source, env_path, project, "up", "-d", "--build", "--wait",
+                     "silverbulletapp", "silverbulletbootstrap", "silverbulletadapter")
             started = True
             phase = "locate and inspect temporary containers"
             sb = _compose(source, env_path, project, "ps", "-q", "silverbulletapp")
@@ -273,6 +276,26 @@ def run() -> dict:
                 raise AcceptanceError("One or both add-on containers did not start")
             _inspect(sb, network, state)
             _inspect(mcp, network, state)
+            phase = "verify SilverBullet 3 one-shot bootstrap"
+            init = _compose(source, env_path, project, "ps", "-a", "-q", "silverbulletbootstrap")
+            if not init:
+                raise AcceptanceError("Bootstrap container was not created")
+            _inspect(init, network, state)
+            init_state = json.loads(docker("inspect", init))[0]["State"]
+            if init_state.get("ExitCode") != 0 or init_state.get("Status") != "exited":
+                raise AcceptanceError("Bootstrap did not complete successfully")
+            if not (server / "users.json").is_file() or not (server / "spaces.json").is_file():
+                raise AcceptanceError("Dashboard was not initialized")
+            if not (secret_dir / "token").read_text().strip().startswith("sbt_"):
+                raise AcceptanceError("Server-issued API token was not persisted")
+            users = json.loads((server / "users.json").read_text())
+            if users.get("admin", {}).get("admin") is not True or \
+                    users.get("switchboard-agent", {}).get("admin") is not False:
+                raise AcceptanceError("Missing restricted agent identity")
+            spaces = json.loads((server / "spaces.json").read_text())
+            entries = spaces.get("spaces", spaces)
+            if not any(v.get("name") == "Knowledge" for v in entries.values() if isinstance(v, dict)):
+                raise AcceptanceError("Knowledge space was not initialized")
             phase = "wait for MCP initialize/tools/list"
             for attempt in range(50):
                 try:
@@ -293,11 +316,12 @@ def run() -> dict:
             if len(files) < 3:
                 raise AcceptanceError("MCP writes not persisted in disposable Markdown space")
             return {
-                "official_silverbullet": "2.12.1-slim",
-                "compose_service_count": 2,
+                "official_silverbullet": "3.0-edge-slim (digest pinned)",
+                "compose_service_count": 3,
+                "bootstrap_complete": True,
                 "private_internal_network": True,
                 "host_ports_published": False,
-                "mcp_tools_tested": 7,
+                "mcp_tools_tested": 11,
                 "mcp_bearer_required": True,
                 "mcp_anonymous_and_invalid_rejected": True,
                 "read_write_etag_feedback_verified": True,
