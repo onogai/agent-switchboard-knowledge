@@ -375,8 +375,12 @@ def run() -> dict:
                 time.sleep(1)
             phase = "start authenticated adapter after bootstrap"
             print("E2E: " + phase, flush=True)
+            # The one-shot bootstrap already exited successfully. Starting
+            # dependencies again can re-run setup and make this step fail even
+            # when the adapter itself is healthy. Production Compose still
+            # declares and enforces the dependency on a normal full startup.
             _compose(source, env_path, project, "up", "-d", "--no-build",
-                     "silverbulletadapter", timeout_s=180)
+                     "--no-deps", "silverbulletadapter", timeout_s=180)
             mcp = _compose(source, env_path, project, "ps", "-q", "silverbulletadapter")
             if not mcp:
                 raise AcceptanceError("MCP adapter was not created")
