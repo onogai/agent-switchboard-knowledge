@@ -1,6 +1,6 @@
 """End-to-end SilverBullet MCP transport acceptance, using disposable data.
 
-Exercises REAL HTTP Streamable MCP via loopback and all seven knowledge tools.
+Exercises REAL HTTP Streamable MCP via loopback and all eleven knowledge tools.
 The SilverBullet API is emulated locally and shares a temporary Markdown
 space. No existing SilverBullet space, token, Gateway or production port is used.
 This cannot establish compatibility with a particular deployed SilverBullet
@@ -88,7 +88,12 @@ def fake_api(space: Path):
                     self._reply(404)
                     return
                 data = path.read_bytes()
-                self._reply(200, data, self._etag(data))
+                # SilverBullet 3 distinguishes browser representation ETag
+                # from the content revision accepted by PUT If-Match.
+                tag = self._etag(data)
+                if "application/octet-stream" not in self.headers.get("Accept", ""):
+                    tag = tag.replace('"sha256:', '"sha256-typed:', 1)
+                self._reply(200, data, tag)
                 return
             exists = path.is_file()
             if self.headers.get("If-None-Match") == "*" and exists:
