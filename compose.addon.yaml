@@ -8,6 +8,7 @@ services:
       SB_FOLDER: /data
       SB_UPDATE_CHECK: "0"
       SB_SHELL_BACKEND: "off"
+      SB_MCP: "0"
       SB_DISABLE_SERVICE_WORKER: "1"
     volumes:
       - type: bind
