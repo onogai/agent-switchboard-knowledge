@@ -309,7 +309,7 @@ def run() -> dict:
             _mcp_auth_probe(mcp)
             phase = "authenticate real SilverBullet filesystem API"
             _api_probe(mcp)
-            phase = "exercise seven MCP tools, writes, feedback and ETags"
+            phase = "exercise eleven MCP tools, writes, feedback and ETags"
             result = _accept(mcp)
             phase = "verify persistent disposable Markdown writes"
             files = list(space.rglob("*.md"))
