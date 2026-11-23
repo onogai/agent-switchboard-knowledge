@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import shutil
@@ -61,6 +62,31 @@ def _compose(source: Path, env_path: Path, project: str, *args: str,
         "--env-file", str(env_path), "-f", str(source / "compose.addon.yaml"),
         *args, timeout_s=timeout_s,
     )
+
+
+def _bootstrap_failure(container: str) -> str:
+    """Extract only our allowlisted diagnostic marker, never raw container logs.
+
+    Docker logs might contain credentials from unexpected upstream failure
+    messages, so the acceptance tool must not print logs verbatim.
+    """
+    try:
+        proc = subprocess.run(["docker", "logs", "--tail", "80", container],
+                              capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return "Bootstrap exited unsuccessfully (logs unavailable)"
+    combined = (proc.stdout + "\n" + proc.stderr)[-24000:]
+    markers = re.findall(
+        r"SilverBullet bootstrap failed at ([a-z][a-z-]{0,60}): ([A-Za-z][A-Za-z0-9_]{0,60})",
+        combined,
+    )
+    if markers:
+        phase, name = markers[-1]
+        return f"Bootstrap failed during {phase} ({name})"
+    last_phase = re.findall(r"SilverBullet bootstrap phase: ([a-z][a-z-]{0,60})", combined)
+    if last_phase:
+        return f"Bootstrap stopped during {last_phase[-1]} (see host Docker logs)"
+    return "Bootstrap exited unsuccessfully (no safe diagnostic marker found)"
 
 
 def _probe(container: str) -> None:
@@ -340,7 +366,7 @@ def run() -> dict:
                 init_state = json.loads(docker("inspect", init))[0]["State"]
                 if init_state.get("Status") == "exited":
                     if init_state.get("ExitCode") != 0:
-                        raise AcceptanceError("Bootstrap exited unsuccessfully (inspect its logs)")
+                        raise AcceptanceError(_bootstrap_failure(init))
                     break
                 if init_state.get("Status") in {"dead", "removing"}:
                     raise AcceptanceError("Bootstrap container stopped unexpectedly")
