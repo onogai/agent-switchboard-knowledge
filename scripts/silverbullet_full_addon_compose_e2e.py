@@ -33,16 +33,18 @@ class AcceptanceError(RuntimeError):
 
 
 def command(*args: str, cwd: Path | None = None, env: dict | None = None,
-            input_text: str | None = None) -> str:
+            input_text: str | None = None,
+            timeout_s: int = 180) -> str:
     # Do not echo raw Compose/exec errors: credential values can appear in
     # interpolation diagnostics or stack traces from the test container.
     try:
         result = subprocess.run(
             args, cwd=cwd, env=env, input=input_text,
-            capture_output=True, text=True, timeout=180,
+            capture_output=True, text=True, timeout=timeout_s,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise AcceptanceError(f"{args[0]} failed: {type(exc).__name__}") from exc
+        raise AcceptanceError(f"{args[0]} exceeded {timeout_s}s" if isinstance(exc, subprocess.TimeoutExpired)
+                              else f"{args[0]} failed: {type(exc).__name__}") from exc
     if result.returncode:
         raise AcceptanceError(f"{args[0]} exited with status {result.returncode}")
     return result.stdout.strip()
@@ -52,11 +54,12 @@ def docker(*args: str, **kwargs) -> str:
     return command("docker", *args, **kwargs)
 
 
-def _compose(source: Path, env_path: Path, project: str, *args: str) -> str:
+def _compose(source: Path, env_path: Path, project: str, *args: str,
+             timeout_s: int = 180) -> str:
     return docker(
         "compose", "--project-name", project, "--project-directory", str(source),
         "--env-file", str(env_path), "-f", str(source / "compose.addon.yaml"),
-        *args,
+        *args, timeout_s=timeout_s,
     )
 
 
@@ -153,10 +156,12 @@ from pathlib import Path
 base = os.environ["KNOWLEDGE_BASE_URL"]
 token = Path(os.environ["KNOWLEDGE_TOKEN_FILE"]).read_text().strip()
 with httpx.Client(timeout=8, trust_env=False) as client:
-    anonymous = client.get(base + "/.fs/Wiki/E2E-Sentinel.md")
+    anonymous = client.get(base + "/.fs/Wiki/E2E-Sentinel.md",
+                           headers={"X-Sync-Mode": "true"})
     assert anonymous.status_code in (401, 403), anonymous.status_code
     authorized = client.get(base + "/.fs/Wiki/E2E-Sentinel.md",
-                            headers={"Authorization": "Bearer " + token})
+                            headers={"Authorization": "Bearer " + token,
+                                     "X-Sync-Mode": "true"})
     assert authorized.status_code == 200, authorized.status_code
     assert "Disposable add-on acceptance" in authorized.text
 """
@@ -207,7 +212,8 @@ def _assert_unused_project(project: str, network: str) -> None:
 
 
 
-def _inspect(container: str, network: str, state: Path) -> None:
+def _inspect(container: str, network: str, state: Path, *,
+             readonly_targets: frozenset[str] = frozenset()) -> None:
     info = json.loads(docker("inspect", container))[0]
     host = info["HostConfig"]
     if (host.get("PortBindings") or host.get("Privileged") or
@@ -220,7 +226,7 @@ def _inspect(container: str, network: str, state: Path) -> None:
         src = Path(mount["Source"]).resolve()
         if src != state and state not in src.parents:
             raise AcceptanceError("Container mounted data outside disposable state")
-        if mount["Destination"] in ("/knowledge", "/run/secrets/silverbullet-token", "/run/secrets/silverbullet-mcp-token") and mount["RW"]:
+        if mount["Destination"] in readonly_targets and mount["RW"]:
             raise AcceptanceError("MCP knowledge/token mounts must be read-only")
 
 
@@ -305,25 +311,47 @@ def run() -> dict:
                 "service": "silverbulletadapter",
                 "instance": project, "addon_id": "silverbullet", "network": network,
             })
-            phase = "build and start SilverBullet 3, bootstrap and adapter"
-            _compose(source, env_path, project, "up", "-d", "--build", "--wait",
-                     "silverbulletapp", "silverbulletbootstrap", "silverbulletadapter")
-            started = True
-            phase = "locate and inspect temporary containers"
+            phase = "pull pinned SilverBullet 3 slim image"
+            _compose(source, env_path, project, "pull", "silverbulletapp", timeout_s=900)
+            phase = "build standalone MCP and bootstrap images"
+            _compose(source, env_path, project, "build", "silverbulletbootstrap",
+                     "silverbulletadapter", timeout_s=900)
+            phase = "start SilverBullet 3 server"
+            _compose(source, env_path, project, "up", "-d", "--no-build",
+                     "silverbulletapp", timeout_s=180)
             sb = _compose(source, env_path, project, "ps", "-q", "silverbulletapp")
-            mcp = _compose(source, env_path, project, "ps", "-q", "silverbulletadapter")
-            if not sb or not mcp:
-                raise AcceptanceError("One or both add-on containers did not start")
+            if not sb:
+                raise AcceptanceError("SilverBullet server container was not created")
             _inspect(sb, network, state)
-            _inspect(mcp, network, state)
-            phase = "verify SilverBullet 3 one-shot bootstrap"
+            phase = "start SilverBullet 3 bootstrap"
+            _compose(source, env_path, project, "up", "-d", "--no-build",
+                     "silverbulletbootstrap", timeout_s=180)
             init = _compose(source, env_path, project, "ps", "-a", "-q", "silverbulletbootstrap")
             if not init:
                 raise AcceptanceError("Bootstrap container was not created")
             _inspect(init, network, state)
-            init_state = json.loads(docker("inspect", init))[0]["State"]
-            if init_state.get("ExitCode") != 0 or init_state.get("Status") != "exited":
-                raise AcceptanceError("Bootstrap did not complete successfully")
+            phase = "wait for one-shot bootstrap to exit successfully"
+            for attempt in range(210):
+                init_state = json.loads(docker("inspect", init))[0]["State"]
+                if init_state.get("Status") == "exited":
+                    if init_state.get("ExitCode") != 0:
+                        raise AcceptanceError("Bootstrap exited unsuccessfully (inspect its logs)")
+                    break
+                if init_state.get("Status") in {"dead", "removing"}:
+                    raise AcceptanceError("Bootstrap container stopped unexpectedly")
+                if attempt == 209:
+                    raise AcceptanceError("Bootstrap did not complete within 210 seconds")
+                time.sleep(1)
+            phase = "start authenticated adapter after bootstrap"
+            _compose(source, env_path, project, "up", "-d", "--no-build",
+                     "silverbulletadapter", timeout_s=180)
+            mcp = _compose(source, env_path, project, "ps", "-q", "silverbulletadapter")
+            if not mcp:
+                raise AcceptanceError("MCP adapter was not created")
+            _inspect(mcp, network, state, readonly_targets=frozenset({
+                "/knowledge", "/run/secrets/silverbullet-token",
+                "/run/secrets/silverbullet-mcp-token",
+            }))
             if not (server / "users.json").is_file() or not (server / "spaces.json").is_file():
                 raise AcceptanceError("Dashboard was not initialized")
             if not (secret_dir / "token").read_text().strip().startswith("sbt_"):
