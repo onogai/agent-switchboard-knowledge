@@ -141,12 +141,21 @@ def _configure_agent(http: httpx.Client, agentpass: str) -> None:
         raise KnowledgeError("Knowledge space permissions failed verification.")
 
 
+def _token_probe(token: str) -> bool:
+    # Never reuse the bootstrap admin session cookie for token verification.
+    with httpx.Client(base_url=BASE, timeout=5, follow_redirects=False,
+                      trust_env=False) as probe:
+        response = probe.get("/.help", headers={"Authorization": f"Bearer {token}"})
+        if response.status_code == 200:
+            _expect(response)
+            return True
+        return False
+
+
 def _configure_token(http: httpx.Client, token_path: Path) -> None:
     current = _secret(token_path.parent, token_path.name)
     if current.startswith("sbt_"):
-        check = http.get("/.help", headers={"Authorization": f"Bearer {current}"})
-        if check.status_code == 200:
-            _expect(check)
+        if _token_probe(current):
             return
         raise KnowledgeError("Existing SilverBullet agent API token failed authorization; refusing silent rotation.")
 
@@ -170,10 +179,8 @@ def _configure_token(http: httpx.Client, token_path: Path) -> None:
     finally:
         if tmp.exists():
             tmp.unlink()
-    check = http.get("/.help", headers={"Authorization": f"Bearer {minted}"})
-    if check.status_code != 200:
+    if not _token_probe(minted):
         raise KnowledgeError("Minted agent API token cannot reach the Knowledge space.")
-    _expect(check)
 
 
 def run() -> None:
