@@ -221,6 +221,28 @@ class FullAddonE2EDriverTests(unittest.TestCase):
                 e2e.command("docker", "exec", "-i", "disposable-container", "python", "-")
         self.assertNotIn("invalid-phase", str(err.exception))
 
+    def test_installer_wait_reports_failed_bootstrap_phase_privately(self):
+        with patch.object(e2e, "_compose", return_value="disposable-bootstrap"), \
+             patch.object(e2e, "_inspect_bootstrap_exit", return_value=("exited", 1)), \
+             patch.object(e2e, "_bootstrap_failure",
+                          return_value="Bootstrap failed during admin-login (KnowledgeError)"):
+            err = e2e._installer_wait_failure(
+                Path("/tmp/disposable-source"), Path("/tmp/disposable-env"),
+                "sbe2e-only", "old-bootstrap", e2e.AcceptanceError("docker exited with status 1"),
+            )
+        self.assertIn("admin-login", str(err))
+        self.assertNotIn("token", str(err).casefold())
+
+    def test_installer_wait_distinguishes_successful_bootstrap_from_compose_error(self):
+        with patch.object(e2e, "_compose", return_value="disposable-bootstrap"), \
+             patch.object(e2e, "_inspect_bootstrap_exit", return_value=("exited", 0)):
+            err = e2e._installer_wait_failure(
+                Path("/tmp/disposable-source"), Path("/tmp/disposable-env"),
+                "sbe2e-only", "old-bootstrap", e2e.AcceptanceError("docker exited with status 1"),
+            )
+        self.assertIn("Compose lifecycle/--wait failure", str(err))
+        self.assertIn("exit_code=0", str(err))
+
     def test_command_errors_never_echo_credentials(self):
         import subprocess
         failed = subprocess.CompletedProcess(
