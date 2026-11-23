@@ -36,7 +36,7 @@ class FakeV3:
             self.users["admin"] = {"admin": True, "disabled": False, "tokens": {}}
             self.spaces["00000000-0000-4000-8000-000000000001"] = {
                 "name": "Knowledge", "folder": "/knowledge",
-                "binding": {"prefix": "/"}, "access": "none", "members": {},
+                "binding": {"prefix": ""}, "access": "none", "members": {},
             }
             return ok({"status": "ok"})
         if path == "/.dashboard/api/login" and method == "POST":
