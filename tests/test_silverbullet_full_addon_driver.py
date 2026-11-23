@@ -175,6 +175,25 @@ class FullAddonE2EDriverTests(unittest.TestCase):
         self.assertIn("configure-agent-permissions", msg)
         self.assertNotIn("DO_NOT_SHOW", msg)
 
+    def test_compose_failure_classification_never_echoes_daemon_stderr(self):
+        import subprocess
+        failed = subprocess.CompletedProcess(
+            args=["docker", "compose"], returncode=1,
+            stdout="INTERNAL_SECRET_DO_NOT_ECHO",
+            stderr="Error: dependency failed to start; secret=INTERNAL_SECRET_DO_NOT_ECHO",
+        )
+        with patch.object(e2e.subprocess, "run", return_value=failed):
+            with self.assertRaises(e2e.AcceptanceError) as error:
+                e2e.command("docker", "compose", "up")
+        self.assertIn("Compose dependency could not start", str(error.exception))
+        self.assertNotIn("INTERNAL_SECRET_DO_NOT_ECHO", str(error.exception))
+
+    def test_adapter_start_has_no_deps_after_bootstrap_verification(self):
+        source = (Path(__file__).resolve().parents[1] /
+                  "scripts" / "silverbullet_full_addon_compose_e2e.py").read_text()
+        self.assertIn('"--no-deps", "silverbulletadapter"', source)
+        self.assertIn('if init_state.get("ExitCode") != 0:', source)
+
     def test_command_errors_never_echo_credentials(self):
         import subprocess
         failed = subprocess.CompletedProcess(
