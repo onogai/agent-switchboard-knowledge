@@ -221,6 +221,20 @@ class FullAddonE2EDriverTests(unittest.TestCase):
                 e2e.command("docker", "exec", "-i", "disposable-container", "python", "-")
         self.assertNotIn("invalid-phase", str(err.exception))
 
+    def test_bootstrap_failure_extracts_allowlisted_reason_without_raw_logs(self):
+        import subprocess
+        safe = ("SilverBullet bootstrap phase: admin-login\\n"
+                "SilverBullet bootstrap failed at admin-login: "
+                "KnowledgeError [admin-login-refused]\\n")
+        raw = "private-password=WONT_BE_PRINTED\\n" + safe
+        result = subprocess.CompletedProcess(
+            args=["docker", "logs"], returncode=0, stdout=raw, stderr="",
+        )
+        with patch.object(e2e.subprocess, "run", return_value=result):
+            msg = e2e._bootstrap_failure("disposable-only")
+        self.assertIn("reason=admin-login-refused", msg)
+        self.assertNotIn("WONT_BE_PRINTED", msg)
+
     def test_installer_wait_reports_failed_bootstrap_phase_privately(self):
         with patch.object(e2e, "_compose", return_value="disposable-bootstrap"), \
              patch.object(e2e, "_inspect_bootstrap_exit", return_value=("exited", 1)), \
