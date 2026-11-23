@@ -29,13 +29,13 @@ class FakeV3:
         if path == "/.setup/api/status":
             return ok({"root": "/data"}) if not self.setup else ok({}, 404)
         if path == "/.setup/api/complete" and method == "POST":
-            assert payload["space"]["folder"] == "spaces/knowledge"
+            assert payload["space"]["folder"] == "/knowledge"
             assert payload["space"]["starter"] == {"type": "none"}
             self.setup = True
             self.setup_count += 1
             self.users["admin"] = {"admin": True, "disabled": False, "tokens": {}}
             self.spaces["00000000-0000-4000-8000-000000000001"] = {
-                "name": "Knowledge", "folder": "spaces/knowledge",
+                "name": "Knowledge", "folder": "/knowledge",
                 "binding": {"prefix": "/"}, "access": "none", "members": {},
             }
             return ok({"status": "ok"})
