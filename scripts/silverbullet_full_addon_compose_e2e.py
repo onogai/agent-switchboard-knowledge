@@ -69,6 +69,23 @@ def command(*args: str, cwd: Path | None = None, env: dict | None = None,
         # Never surface raw daemon/Compose stderr: it may include secrets from
         # interpolation or a failing command's arguments.
         diagnostic = _safe_docker_failure(result.stderr) if args[0] == "docker" else ""
+        # This opt-in MCP checker prints only fixed operation labels and exception
+        # class names, never raw tool errors, page content or credentials.
+        if args[:3] == ("docker", "exec", "-i"):
+            safe_steps = {
+                "connect", "catalog", "read-sentinel", "create-wiki",
+                "read-created", "filesystem-search", "list-feedback",
+                "resolve-feedback", "update-page", "reject-stale-etag",
+                "read-after-stale", "capture-note", "complete",
+            }
+            markers = re.findall(
+                r"(?m)^E2E_ACCEPT_FAIL:([a-z-]{1,40}):([A-Za-z][A-Za-z0-9_]{0,50})$",
+                result.stdout,
+            )
+            if markers:
+                stage, kind = markers[-1]
+                if stage in safe_steps:
+                    diagnostic = f" (MCP acceptance failed at {stage}: {kind})"
         raise AcceptanceError(f"{args[0]} exited with status {result.returncode}{diagnostic}")
     return result.stdout.strip()
 
@@ -225,12 +242,21 @@ def _accept(container: str) -> dict:
 import asyncio
 from pathlib import Path
 import os
-result = asyncio.run(accept(
-    "http://127.0.0.1:8773/mcp",
-    read_page="Wiki/E2E-Sentinel",
-    write_test=True,
-    bearer_token=Path(os.environ["SILVERBULLET_MCP_TOKEN_FILE"]).read_text().strip(),
-))
+_state = {"step": "connect"}
+def _checkpoint(step):
+    _state["step"] = step
+    print("E2E_ACCEPT_STEP:" + step, flush=True)
+try:
+    result = asyncio.run(accept(
+        "http://127.0.0.1:8773/mcp",
+        read_page="Wiki/E2E-Sentinel",
+        write_test=True,
+        bearer_token=Path(os.environ["SILVERBULLET_MCP_TOKEN_FILE"]).read_text().strip(),
+        on_step=_checkpoint,
+    ))
+except Exception as exc:
+    print(f"E2E_ACCEPT_FAIL:{_state['step']}:{type(exc).__name__}", flush=True)
+    raise SystemExit(2)
 print("E2E_RESULT:" + json.dumps(result, sort_keys=True))
 """
     out = docker("exec", "-i", container, "python", "-", input_text=code)
