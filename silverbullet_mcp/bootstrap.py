@@ -122,7 +122,8 @@ def _configure_agent(http: httpx.Client, agentpass: str) -> None:
     if config.get("access", "none") != "none":
         raise KnowledgeError("Knowledge space would grant anonymous access.")
     binding = config.get("binding", {})
-    if binding != {"prefix": "/"}:
+    # SilverBullet normalizes root prefix "/" to "" when saving spaces.json.
+    if not isinstance(binding, dict) or set(binding) != {"prefix"} or binding["prefix"] not in ("", "/"):
         raise KnowledgeError("Knowledge space is not bound to the expected root path.")
     members = config.get("members") or {}
     expected = {"role": "write", "runtimeApi": False}
