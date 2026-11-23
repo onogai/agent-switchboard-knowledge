@@ -23,7 +23,8 @@ EXPECTED = {
     "notes_create_wiki_page", "notes_update_page",
     "notes_list_agent_feedback", "notes_resolve_agent_feedback",
     "notes_overview", "notes_search_status", "notes_search_ranked",
-    "notes_related_pages",
+    "notes_related_pages", "notes_list_pages", "notes_backlinks",
+            "notes_edit_page", "notes_move_page", "notes_delete_page",
 }
 
 
@@ -73,7 +74,7 @@ async def accept(url: str, *, read_page: str | None = None,
         step("catalog")
         names = {tool.name for tool in await client.list_tools()}
         if names != EXPECTED:
-            raise ValueError("Live MCP catalog differs from the required eleven tools")
+            raise ValueError("Live MCP catalog differs from the required sixteen tools")
         summary["catalog_checked"] = True
 
         if read_page:

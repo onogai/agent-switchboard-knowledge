@@ -16,7 +16,7 @@ from fastmcp import FastMCP
 from fastmcp.server.auth import AccessToken, TokenVerifier
 from mcp.types import ToolAnnotations
 
-from .knowledge import KnowledgeClient, KnowledgeError, list_feedback, search_pages
+from .knowledge import KnowledgeClient, KnowledgeError, list_feedback, search_pages, list_pages, backlinks
 from .v3_api import overview as v3_overview, search_status as v3_search_status, find as v3_find, related as v3_related
 
 
@@ -72,6 +72,18 @@ async def notes_search(query: str, limit: int = 10) -> dict:
     return await asyncio.to_thread(search_pages, client.root, query, limit)
 
 
+async def notes_list_pages(prefix: str = "", limit: int = 50, offset: int = 0) -> dict:
+    """Browse actual Markdown page paths, optionally limited to a folder subtree such as Wiki/Automobiles. Returns a bounded page list and pagination details."""
+    client = KnowledgeClient.from_environment()
+    return await asyncio.to_thread(list_pages, client.root, prefix, limit, offset)
+
+
+async def notes_backlinks(page: str, limit: int = 30) -> dict:
+    """Find explicit SilverBullet wiki links pointing at a specific page. Returns source pages, lines and excerpts; this does not infer semantic relationships."""
+    client = KnowledgeClient.from_environment()
+    return await asyncio.to_thread(backlinks, client.root, page, limit)
+
+
 async def notes_overview() -> dict:
     """Discover available folders, top-level pages, skills and tags via SilverBullet 3.0 /.help. Prefer this before searching when unfamiliar with the knowledge space."""
     return await asyncio.to_thread(v3_overview)
@@ -124,6 +136,27 @@ async def notes_update_page(page: str, content: str, etag: str) -> dict:
                                    page, content, etag)
 
 
+async def notes_edit_page(page: str, old_text: str, new_text: str, etag: str) -> dict:
+    """Replace exactly one occurrence of old_text in an existing Wiki/ or Inbox/ page. Requires the current ETag; refuses ambiguous matches and concurrent edits."""
+    _require_write_mode()
+    return await asyncio.to_thread(KnowledgeClient.from_environment().edit_page,
+                                   page, old_text, new_text, etag)
+
+
+async def notes_move_page(source: str, destination: str, etag: str) -> dict:
+    """Move an existing Inbox/ or Wiki/ Markdown page to a free path using conditional writes. Requires a current ETag. Backlinks are not rewritten; conflicts abort safely."""
+    _require_write_mode()
+    return await asyncio.to_thread(KnowledgeClient.from_environment().move_page,
+                                   source, destination, etag)
+
+
+async def notes_delete_page(page: str, etag: str, confirm: bool = False) -> dict:
+    """Permanently delete one Inbox/ or Wiki/ Markdown page. Requires a current ETag and explicit confirm=true; rejects stale revisions and protected paths."""
+    _require_write_mode()
+    return await asyncio.to_thread(KnowledgeClient.from_environment().delete_page,
+                                   page, etag, confirm)
+
+
 async def notes_list_agent_feedback(limit: int = 20) -> dict:
     """Find pending @agent HTML comments in Markdown notes; return feedback ID, page, text and preceding context. Read the current page before calling notes_resolve_agent_feedback."""
     client = KnowledgeClient.from_environment()
@@ -137,13 +170,14 @@ async def notes_resolve_agent_feedback(page: str, feedback_id: str, etag: str) -
     return await asyncio.to_thread(client.resolve_feedback, page, feedback_id, etag)
 
 
-_READ_ONLY = {"notes_search", "notes_read_page", "notes_list_agent_feedback", "notes_overview", "notes_search_status", "notes_search_ranked", "notes_related_pages"}
-_DESTRUCTIVE = {"notes_update_page", "notes_resolve_agent_feedback"}
+_READ_ONLY = {"notes_search", "notes_read_page", "notes_list_agent_feedback", "notes_overview", "notes_search_status", "notes_search_ranked", "notes_related_pages", "notes_list_pages", "notes_backlinks"}
+_DESTRUCTIVE = {"notes_update_page", "notes_edit_page", "notes_move_page", "notes_delete_page", "notes_resolve_agent_feedback"}
 
 for _tool in (
     notes_search, notes_read_page, notes_overview, notes_search_status,
-    notes_search_ranked, notes_related_pages, notes_capture,
-    notes_create_wiki_page, notes_update_page,
+    notes_search_ranked, notes_related_pages, notes_list_pages, notes_backlinks,
+    notes_capture, notes_create_wiki_page, notes_update_page, notes_edit_page,
+    notes_move_page, notes_delete_page,
     notes_list_agent_feedback, notes_resolve_agent_feedback,
 ):
     mcp.tool(_tool, annotations=ToolAnnotations(

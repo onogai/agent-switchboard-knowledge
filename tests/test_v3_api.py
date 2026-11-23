@@ -71,6 +71,33 @@ class V3APITests(unittest.TestCase):
                 v3_api.overview()
         self.assertNotIn("never-echo", str(err.exception))
         self.assertNotIn("example-private-token", str(err.exception))
+    def test_search_busy_retries_twice_and_reports_busy_not_quota(self):
+        calls = []
+        original_client = httpx.Client
+        def handler(request):
+            calls.append(request)
+            return (httpx.Response(429, headers={"Retry-After": "1"}, json={"error": "busy"})
+                    if len(calls) < 3 else httpx.Response(200, json={"items": [], "total": 0}))
+        transport = httpx.MockTransport(handler)
+        def factory(*args, **kwargs):
+            return original_client(*args, transport=transport, **kwargs)
+        with patch.object(KnowledgeClient, "from_environment", return_value=self.client), \
+             patch.object(v3_api.httpx, "Client", side_effect=factory), \
+             patch.object(v3_api.time, "sleep") as wait:
+            self.assertEqual([], v3_api.find("sensible question", "natural", 5)["items"])
+        self.assertEqual(3, len(calls))
+        self.assertEqual(2, wait.call_count)
+
+        calls.clear()
+        transport = httpx.MockTransport(lambda request: (
+            calls.append(request) or httpx.Response(
+                429, headers={"Retry-After": "1"}, json={"error": "busy"})))
+        with patch.object(KnowledgeClient, "from_environment", return_value=self.client), \
+             patch.object(v3_api.httpx, "Client", side_effect=factory), \
+             patch.object(v3_api.time, "sleep"):
+            with self.assertRaisesRegex(KnowledgeError, "busy after bounded retries"):
+                v3_api.find("sensible question", "natural", 5)
+        self.assertEqual(3, len(calls))
 
 
 if __name__ == "__main__":

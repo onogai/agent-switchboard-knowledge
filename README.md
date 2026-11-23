@@ -1,94 +1,75 @@
-# Switchboard SilverBullet 3.0 Add-on
+# Switchboard Knowledge — SilverBullet 3 add-on
 
-Standalone, self-contained [Switchboard](https://github.com/onogai/agent-switchboard) add-on bundling **SilverBullet 3.0 edge slim**, automated private-space setup, and an authenticated MCP adapter.
+Standalone [Switchboard](https://github.com/onogai/agent-switchboard) add-on built on the official **SilverBullet 3.0 edge-slim** image. It provides a private, human-readable Markdown knowledge space and a bearer-authenticated MCP endpoint.
 
-> Migration branch status: **unit-checked, but real Docker installation / production cutover NOT yet tested**. The 2.12.1 installation must remain untouched until a clean disposable E2E succeeds.
+Existing add-on ID **silverbullet** and instance names are intentionally unchanged. Upgrading an installed SilverBullet 3 add-on does **not** migrate, rename or rewrite the Markdown files.
 
-## Architecture
+## Components and storage
 
-Three private, host-port-free Docker Compose services:
+Three private Compose services, with no published host ports:
 
-1. **`silverbulletapp`** runs the official 3.0 `edge-slim` multi-arch manifest **pinned by digest** (no Chromium or Runtime API).
-2. **`silverbulletbootstrap`** runs only during setup and exits successfully after provisioning.
-3. **`silverbulletadapter`** provides private bearer-authenticated FastMCP, preserving the original seven note/feedback tools and adding four SilverBullet 3 discovery/search tools.
+- **silverbulletapp:** official image pinned by digest, with upstream MCP and shell disabled.
+- **silverbulletbootstrap:** idempotently provisions SilverBullet 3 and its search model using the authenticated admin API, then exits.
+- **silverbulletadapter:** FastMCP server with a dedicated bearer token, a non-admin SilverBullet API token, and read-only local Markdown visibility for browsing.
 
-Persistent state is kept in two **independent** directories managed by Switchboard:
+The installer owns persistent state at `server/` (accounts, model, indexes), `space/` (Markdown notes and attachments), and private `secrets/`. Containers have read-only roots, no Linux capabilities, and only private-network access. The agent's upstream account is restricted to write access to the private Knowledge space, **without Runtime API**. The adapter never proxies arbitrary SilverBullet shell, runtime or admin methods.
 
-| Path relative to add-on state | Container path | Contents |
-| --- | --- | --- |
-| `server/` | `/data` | SilverBullet 3 accounts, spaces, search indexes and server metadata |
-| `space/` | `/knowledge` | Markdown pages and attachments |
-| `secrets/` | private mounts | Generated admin password, agent password, MCP bearer and SilverBullet account token |
+## Automatic semantic search
 
-The `/data` directory is empty on first boot. It **must not** contain the initial Markdown space: SilverBullet 3 would otherwise mistake it for a legacy single-space installation and start the migration wizard.
+On the first install **and on subsequent bootstrap runs**, the bootstrap selects a search model via the supported SilverBullet Admin API. Default:
 
-## Automatic bootstrap
+`KNOWLEDGE_SEMANTIC_MODEL=granite-embedding-97m-multilingual-r2`
 
-On first installation, the bootstrap service uses the private SilverBullet setup API to:
+The other supported values are `multilingual-e5-small` or `off`. This environment variable is passed through to the bootstrap Compose service. Existing matching configuration is left untouched: **no repeated download and no index rebuild**. Changing the model deliberately rebuilds embeddings; existing Markdown content is unaffected.
 
-- Create the `admin` account with a generated password, and an empty `Knowledge` space bound at `/`, backed by `/knowledge`.
-- Keep anonymous access at `none`.
-- Create a separate **non-admin** `switchboard-agent` account with `write` access only to `Knowledge`, and `runtimeApi: false`.
-- Issue a scoped account API token and atomically store it as `secrets/token`.
-- Verify the token using a **fresh HTTP client without admin cookies**.
-- Exit successfully so Docker Compose may start the adapter.
+SilverBullet downloads the chosen model and indexes pages asynchronously. Check `notes_search_status` before expecting `mode="natural"` and `notes_related_pages` to give semantic results. While the index is building, `natural` may fall back to lexical results with a `partial` flag/notice. Once idle, SilverBullet unloads the model from RAM after five minutes; indexes remain on disk. No external embedding API is used.
 
-The bootstrap service is idempotent: repeated runs verify the existing state and token without creating more accounts, spaces, or tokens. Unexpected access rights, changed passwords or invalid existing tokens **fail closed**, rather than silently resetting credentials.
+## MCP tool catalog (16 tools)
 
-No public host ports are bound. Upstream `SB_MCP=0`, `SB_SHELL_BACKEND=off` and `SB_DISABLE_SERVICE_WORKER=1`; all three containers drop capabilities, use read-only roots and mount only add-on state.
+| Capability | Tools |
+| --- | --- |
+| Browse | `notes_overview`, `notes_list_pages`, `notes_read_page`, `notes_backlinks` |
+| Search | `notes_search`, `notes_search_ranked`, `notes_search_status`, `notes_related_pages` |
+| Create | `notes_capture`, `notes_create_wiki_page` |
+| Edit | `notes_update_page`, `notes_edit_page` |
+| Organize | `notes_move_page`, `notes_delete_page` |
+| Feedback | `notes_list_agent_feedback`, `notes_resolve_agent_feedback` |
 
-## MCP tools
+**Important contracts:**
 
-The original seven remain available:
+- `notes_search` remains the legacy local keyword scan. Prefer `notes_search_ranked` for indexed `words`, `phrase`, or `natural` searches.
+- `notes_list_pages` returns bounded paths with prefix/offset pagination, not entire documents; `notes_backlinks` finds **explicit** `[[wiki links]]`, not inferred semantic references.
+- Agent writes are confined to `Inbox/` and `Wiki/`. Content writes reject executable SilverBullet Markdown.
+- Existing-page operations require the **ETag from `notes_read_page`**. `notes_edit_page` replaces exactly one occurrence, `notes_update_page` replaces the whole document, and `notes_delete_page` additionally requires `confirm=true`.
+- `notes_move_page` copies to a new path, then deletes the source under its ETag. It attempts to remove the new copy if the source revision changes. This is not an atomic server-side rename, and **links pointing to the old page are not rewritten**.
+- Transient SilverBullet `SearchError::Busy` HTTP 429 is retried at most twice for search/related reads (respecting a bounded `Retry-After`). Persistent busy errors are reported as busy, not as account quotas.
 
-- `notes_search`, `notes_read_page`, `notes_capture`, `notes_create_wiki_page`, `notes_update_page`, `notes_list_agent_feedback`, `notes_resolve_agent_feedback`.
+## Install and update
 
-Four SilverBullet 3 HTTP API tools were added:
+For an empty new instance, using a Switchboard version with schema-v2 add-on support:
 
-- `notes_overview`: `GET /.help`, discovers folders, top pages, tags and agent skills.
-- `notes_search_status`: `GET /.search/status`, inspects search index readiness and enabled modes.
-- `notes_search_ranked`: `POST /.search/query`, `words`, `phrase` or optionally `natural`.
-- `notes_related_pages`: `POST /.search/related`, requires configured semantic indexing.
+```sh
+./switchboard addon https://github.com/onogai/agent-switchboard-silverbullet.git --name silverbullet3 --target production
+./switchboard addons
+```
 
-The original keyword scanner remains for compatibility, but the new ranked search uses SilverBullet's native index. **Semantic embeddings are disabled by default**; enabling them later requires a resource and retrieval-quality test. No additional vector database or Chromium is required for the 3.0 search API.
+For an **existing** SilverBullet 3 instance, use the normal Switchboard add-on update procedure on the same instance. Keep its existing `server/`, `space/` and `secrets/` directories. **Do not run the SilverBullet 2 → 3 migration again**. The bootstrap recognizes the configured accounts, space, token and model, and applies only necessary changes. New tools may require enabling their grants in Switchboard Manager.
 
-## Verification before deployment
+For a genuinely old 2.12 installation, see [docs/silverbullet-3-migration.md](docs/silverbullet-3-migration.md); that migration is a separate, one-time task.
 
-For offline tests (requires Python 3.12+):
+## Verification
+
+The default GitHub Actions workflow runs compile and unit tests once per push:
 
 ```sh
 python -m pip install -r requirements.txt
-python -m unittest discover -s tests -p 'test_*.py' -v
+python -m unittest discover -s tests -p 'test_*.py'
 ```
 
-**Installation acceptance is a separate next step**, with a disposable private network, temporary credentials and storage:
+An optional disposable Docker acceptance test exercises the actual official server and private MCP transport without touching production. It explicitly turns **semantic search off** during that smoke test to avoid downloading a model solely for infrastructure verification; bootstrap model selection is covered by dedicated unit tests.
 
 ```sh
 python -m scripts.silverbullet_full_addon_compose_e2e --confirm-disposable-test
 ```
 
-The acceptance test must run on a host with Docker Compose and should verify all three services, bootstrap, 11 MCP tools, data isolation, writes, search and token rejection. It creates and removes only its randomly named test resources, not the production Markdown folder.
-
-## Installing a *new* parallel instance (only after acceptance)
-
-```sh
-./switchboard addon https://github.com/onogai/agent-switchboard-silverbullet.git --name silverbullet3 --target production
-./switchboard addons
-./switchboard addon logs silverbullet3
-```
-
-The manager must support schema-v2 multi-service add-ons and `--target production`. This deploys an empty 3.0 instance; **the installer does not migrate existing notes or switch tool grants automatically**.
-
-To sign in to the SilverBullet Dashboard, obtain the generated admin password **locally on the Docker host**, from the add-on's private `state/secrets/password` file. Never paste this value into a public issue, PR, log, chat or command-line argument.
-
-## Knowledge migration and rollback
-
-See [docs/silverbullet-3-migration.md](docs/silverbullet-3-migration.md). In summary: snapshot every source file and attachment, stop old writers for a consistent final copy, copy into the new `space/` directory (not `server/`), verify paths and SHA-256, rebuild/search, verify UI and MCP, then switch grants. Keep the old 2.12.1 container and backup for rollback.
-
-Production storage is never mounted by unit tests or the disposable E2E test. The main branch's existing 2.12.1 deployment remains independently restorable until an explicit cutover.
-
-## Notes
-
-- The official image digest comes from GHCR's published 3.0 edge-slim package version and is pinned to prevent moving-edge upgrades.
-- The 3.0 setup and Dashboard REST APIs are authenticated/private except for the first-run wizard; the wizard is reachable **only on Switchboard's private add-on network**, not through a host port. Avoid connecting untrusted containers to this network.
-- UI access through a trusted Tailscale/reverse-proxy route is a separate operator task; this add-on intentionally never publishes the SilverBullet port.
+Never paste generated admin passwords or bearer tokens into chats or issue reports. An administrator can inspect the password from the private add-on secrets directory on the Docker host.

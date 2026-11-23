@@ -20,6 +20,8 @@ AGENT = "switchboard-agent"
 SPACE = "Knowledge"
 SPACE_FOLDER = "/knowledge"
 TOKEN_NAME = "switchboard-addon"
+SEMANTIC_MODEL = os.environ.get("KNOWLEDGE_SEMANTIC_MODEL", "granite-embedding-97m-multilingual-r2").strip()
+SUPPORTED_MODELS = {"off", "granite-embedding-97m-multilingual-r2", "multilingual-e5-small"}
 BASE = os.environ.get("KNOWLEDGE_BASE_URL", "").rstrip("/")
 TIMEOUT_SECONDS = 90
 BOOTSTRAP_PHASE = "preflight"
@@ -150,6 +152,20 @@ def _configure_agent(http: httpx.Client, agentpass: str) -> None:
         raise KnowledgeError("Knowledge space permissions failed verification.")
 
 
+def _configure_semantic_search(http: httpx.Client) -> None:
+    """Select the embedding model via the supported admin API; never rebuild on a rerun."""
+    if SEMANTIC_MODEL not in SUPPORTED_MODELS:
+        raise KnowledgeError("Unsupported semantic search model configuration.")
+    selected = None if SEMANTIC_MODEL == "off" else SEMANTIC_MODEL
+    endpoint = "/.dashboard/api/admin/search"
+    current = _get(http, endpoint)
+    if current.get("model") == selected:
+        return
+    response = _expect(http.put(endpoint, json={"model": selected}))
+    if response.get("model") != selected:
+        raise KnowledgeError("Semantic search model configuration was not confirmed.")
+
+
 def _token_probe(token: str) -> bool:
     # Never reuse the bootstrap admin session cookie for token verification.
     with httpx.Client(base_url=BASE, timeout=5, follow_redirects=False,
@@ -215,6 +231,8 @@ def _safe_failure_code(error: Exception) -> str:
         "Agent API token was previously issued but cannot be recovered from disk.": "token-lost",
         "Server did not return a valid SilverBullet API token.": "token-format",
         "Minted agent API token cannot reach the Knowledge space.": "token-access",
+        "Unsupported semantic search model configuration.": "search-model-unsupported",
+        "Semantic search model configuration was not confirmed.": "search-model-unconfirmed",
     }
     if message in fixed_reasons:
         return fixed_reasons[message]
@@ -260,6 +278,8 @@ def run() -> None:
         _configure_agent(http, agentpass)
         _phase("issue-and-verify-api-token")
         _configure_token(http, directory / "token")
+        _phase("configure-semantic-search")
+        _configure_semantic_search(http)
         _phase("complete")
 
 

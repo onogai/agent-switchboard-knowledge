@@ -100,6 +100,56 @@ def search_pages(root: Path, query: str, limit: int = 10) -> dict:
     return {"results": matches[:limit], "total": len(matches), "truncated": len(matches) > limit}
 
 
+def list_pages(root: Path, prefix: str = "", limit: int = 50, offset: int = 0) -> dict:
+    """List existing Markdown pages without reading their bodies or exporting secrets."""
+    if prefix:
+        prefix = page_path(prefix.rstrip("/"))[:-3]
+    if not 1 <= limit <= 100 or not 0 <= offset <= 100_000:
+        raise KnowledgeError("Limit must be 1–100 and offset 0–100000.")
+    pages = []
+    for path in _pages(root):
+        name = _page_name(path, root)
+        if name == "CONFIG" or name.startswith("Library/"):
+            continue
+        if prefix and name != prefix and not name.startswith(prefix + "/"):
+            continue
+        pages.append(name)
+    pages.sort(key=str.casefold)
+    return {
+        "pages": pages[offset:offset + limit],
+        "total": len(pages),
+        "offset": offset,
+        "truncated": offset + limit < len(pages),
+    }
+
+
+WIKILINK = re.compile(r"\[\[([^\]\n]+)\]\]")
+
+
+def backlinks(root: Path, page: str, limit: int = 30) -> dict:
+    """Find explicit [[page|label]] links; this is not a claim about inferred links."""
+    target = page_path(page)[:-3].casefold()
+    if not 1 <= limit <= 100:
+        raise KnowledgeError("Limit must be 1–100.")
+    hits = []
+    for path in _pages(root):
+        source = _page_name(path, root)
+        if source == "CONFIG" or source.startswith("Library/"):
+            continue
+        content = _read_text(path)
+        if content is None:
+            continue
+        for match in WIKILINK.finditer(content):
+            linked = match.group(1).split("|", 1)[0].split("#", 1)[0].strip()
+            if linked.removesuffix(".md").lstrip("/").casefold() != target:
+                continue
+            line = content.count("\n", 0, match.start()) + 1
+            hits.append({"page": source, "line": line,
+                         "excerpt": content.splitlines()[line - 1].strip()[:300]})
+    return {"target": page_path(page)[:-3], "results": hits[:limit],
+            "total": len(hits), "truncated": len(hits) > limit}
+
+
 def _feedback_in_page(page: str, content: str) -> list[dict]:
     results = []
     for match in COMMENT.finditer(content):
@@ -226,6 +276,66 @@ class KnowledgeClient:
             raise KnowledgeError("A current SilverBullet ETag from read_page is required.")
         response = self._request("PUT", path, content=content, etag=etag)
         return {"page": path[:-3], "etag": response.headers.get("etag")}
+
+    @staticmethod
+    def _require_etag(etag: str) -> None:
+        if not isinstance(etag, str) or not re.fullmatch(r'"sha256:[0-9a-fA-F]{64}"', etag):
+            raise KnowledgeError("A current SilverBullet ETag from read_page is required.")
+
+    def edit_page(self, page: str, old_text: str, new_text: str, etag: str) -> dict:
+        """Replace one exact occurrence, preserving all unrelated page content."""
+        self._require_etag(etag)
+        if not isinstance(old_text, str) or not old_text or len(old_text) > MAX_PAGE_BYTES:
+            raise KnowledgeError("old_text must be nonempty and within page limits.")
+        if not isinstance(new_text, str):
+            raise KnowledgeError("new_text must be a string.")
+        current = self.read_page(page)
+        if current["etag"] != etag:
+            raise KnowledgeError("Page changed since it was read. Read it again before editing.")
+        if current["content"].count(old_text) != 1:
+            raise KnowledgeError("old_text must match exactly once; read the page and choose a unique excerpt.")
+        updated = current["content"].replace(old_text, new_text, 1)
+        if updated == current["content"]:
+            raise KnowledgeError("The edit would not change the page.")
+        return self.update_page(page, updated, etag)
+
+    def move_page(self, source: str, destination: str, etag: str) -> dict:
+        """Copy to a new path, then conditionally delete the source; roll back on conflict."""
+        self._require_etag(etag)
+        src = page_path(source, writable=True)
+        dst = page_path(destination, writable=True)
+        if src == dst:
+            raise KnowledgeError("Source and destination must be different pages.")
+        current = self.read_page(source)
+        if current["etag"] != etag:
+            raise KnowledgeError("Source page changed since it was read.")
+        copied = self._request("PUT", dst, content=current["content"], create=True)
+        new_etag = copied.headers.get("etag")
+        try:
+            self._request("DELETE", src, etag=etag)
+        except KnowledgeError as error:
+            # Roll back only our exact copy, never a newer destination revision.
+            try:
+                if not new_etag:
+                    raise KnowledgeError("Missing destination revision.")
+                self._request("DELETE", dst, etag=new_etag)
+            except KnowledgeError as rollback:
+                raise KnowledgeError(
+                    "Move incomplete: destination copy exists or may have changed; "
+                    "source was not confirmed deleted. Inspect both pages."
+                ) from rollback
+            raise KnowledgeError("Move aborted; source changed and destination copy was removed.") from error
+        return {"source": src[:-3], "page": dst[:-3], "etag": new_etag,
+                "links_updated": False}
+
+    def delete_page(self, page: str, etag: str, confirm: bool = False) -> dict:
+        """Delete one existing page only when its last-read revision matches."""
+        self._require_etag(etag)
+        if confirm is not True:
+            raise KnowledgeError("Explicit confirm=true is required to delete a page.")
+        path = page_path(page, writable=True)
+        self._request("DELETE", path, etag=etag)
+        return {"page": path[:-3], "deleted": True}
 
     def resolve_feedback(self, page: str, feedback_id: str, etag: str) -> dict:
         path = page_path(page, writable=True)

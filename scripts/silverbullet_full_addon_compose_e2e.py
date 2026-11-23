@@ -1,7 +1,7 @@
 """Disposable full SilverBullet add-on Compose acceptance on an ISOLATED Docker host.
 
 Tests the actual schema-v2 packaging, three services, private network,
-automatic bootstrap and eleven real HTTP MCP tools. NEVER points at production
+automatic bootstrap and sixteen real HTTP MCP tools. NEVER points at production
 data, production networks, production Core/Registry or host ports.
 
 Operator-only. Can coexist with other Docker projects: creates and removes
@@ -183,7 +183,8 @@ async def main():
             "notes_create_wiki_page", "notes_update_page",
             "notes_list_agent_feedback", "notes_resolve_agent_feedback",
             "notes_overview", "notes_search_status", "notes_search_ranked",
-            "notes_related_pages",
+            "notes_related_pages", "notes_list_pages", "notes_backlinks",
+            "notes_edit_page", "notes_move_page", "notes_delete_page",
         }
 asyncio.run(main())
 """
@@ -408,7 +409,8 @@ def run() -> dict:
             f"SWITCHBOARD_ADDON_INSTANCE={project}\n"
             f"SWITCHBOARD_ADDON_STATE={state}\n"
             f"SWITCHBOARD_ADDONS_NETWORK={network}\n"
-            f"HOST_UID={os.getuid()}\nHOST_GID={os.getgid()}\n",
+            f"HOST_UID={os.getuid()}\nHOST_GID={os.getgid()}\n"
+            "KNOWLEDGE_SEMANTIC_MODEL=off\n",
             encoding="utf-8",
         )
         env_path.chmod(0o600)
@@ -504,7 +506,7 @@ def run() -> dict:
             phase = "verify SilverBullet 3 overview and indexed full-text search"
             print("E2E: " + phase, flush=True)
             _v3_search_probe(mcp)
-            phase = "exercise eleven MCP tools, writes, feedback and ETags"
+            phase = "exercise sixteen MCP tools, writes, feedback and ETags"
             result = _accept(mcp)
             phase = "verify persistent disposable Markdown writes"
             files = list(space.rglob("*.md"))
@@ -533,7 +535,7 @@ def run() -> dict:
                 "installer_style_compose_wait_verified": True,
                 "private_internal_network": True,
                 "host_ports_published": False,
-                "mcp_tools_tested": 11,
+                "mcp_tools_tested": 16,
                 "mcp_bearer_required": True,
                 "mcp_anonymous_and_invalid_rejected": True,
                 "read_write_etag_feedback_verified": True,

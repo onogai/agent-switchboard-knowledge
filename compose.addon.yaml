@@ -36,6 +36,7 @@ services:
       HOME: /tmp
       KNOWLEDGE_BASE_URL: "http://addon-${SWITCHBOARD_ADDON_INSTANCE}-silverbulletapp:3000"
       SILVERBULLET_BOOTSTRAP_SECRETS_DIR: /run/addon-secrets
+      KNOWLEDGE_SEMANTIC_MODEL: "${KNOWLEDGE_SEMANTIC_MODEL:-granite-embedding-97m-multilingual-r2}"
     volumes:
       - type: bind
         source: "${SWITCHBOARD_ADDON_STATE:?}/secrets"

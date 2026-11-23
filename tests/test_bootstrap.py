@@ -20,6 +20,8 @@ class FakeV3:
         self.tokens = {}
         self.setup_count = 0
         self.mint_count = 0
+        self.search_model = None
+        self.model_changes = 0
 
     def handle(self, req):
         path, method = req.url.path, req.method
@@ -58,6 +60,13 @@ class FakeV3:
         if not path.startswith(prefix) or "session=safe" not in req.headers.get("cookie", ""):
             return ok({}, 401)
         endpoint = path[len(prefix):]
+        if endpoint == "search":
+            if method == "GET":
+                return ok({"model": self.search_model})
+            if method == "PUT":
+                self.search_model = payload["model"]
+                self.model_changes += 1
+                return ok({"model": self.search_model})
         if endpoint == "users" and method == "POST":
             self.users[payload["username"]] = {
                 "admin": payload.get("admin", False), "disabled": False, "tokens": {},
@@ -123,6 +132,8 @@ class SilverBullet3BootstrapTests(unittest.TestCase):
         bootstrap.run()
         self.assertEqual(1, self.backend.setup_count)
         self.assertEqual(1, self.backend.mint_count)
+        self.assertEqual("granite-embedding-97m-multilingual-r2", self.backend.search_model)
+        self.assertEqual(1, self.backend.model_changes)
         space = next(iter(self.backend.spaces.values()))
         self.assertEqual("none", space["access"])
         self.assertEqual({"role": "write", "runtimeApi": False},
@@ -131,6 +142,21 @@ class SilverBullet3BootstrapTests(unittest.TestCase):
         bootstrap.run()
         self.assertEqual(1, self.backend.setup_count)
         self.assertEqual(1, self.backend.mint_count)
+        self.assertEqual(1, self.backend.model_changes)
+
+    def test_can_disable_semantic_search_without_a_migration(self):
+        bootstrap.run()
+        with patch.object(bootstrap, "SEMANTIC_MODEL", "off"):
+            bootstrap.run()
+            bootstrap.run()
+        self.assertIsNone(self.backend.search_model)
+        self.assertEqual(2, self.backend.model_changes)
+
+    def test_rejects_unknown_model_before_configuration_change(self):
+        with patch.object(bootstrap, "SEMANTIC_MODEL", "unknown"):
+            with self.assertRaisesRegex(KnowledgeError, "Unsupported semantic"):
+                bootstrap.run()
+        self.assertEqual(0, self.backend.model_changes)
 
     def test_already_configured_root_space_never_requires_setup_404(self):
         bootstrap.run()

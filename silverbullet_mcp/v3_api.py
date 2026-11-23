@@ -6,6 +6,7 @@ The upstream API token is confined to the private container network.
 from __future__ import annotations
 
 import httpx
+import time
 
 from .knowledge import KnowledgeClient, KnowledgeError, page_path
 
@@ -24,7 +25,17 @@ def _api(method: str, endpoint: str, *, payload: dict | None = None) -> dict:
     try:
         with httpx.Client(base_url=client.base_url, timeout=20, follow_redirects=False,
                           trust_env=False) as http:
-            response = http.request(method, endpoint, headers=headers, json=payload)
+            for attempt in range(3):
+                response = http.request(method, endpoint, headers=headers, json=payload)
+                # 429 means SearchError::Busy in SilverBullet 3, not a user quota.
+                # Only bounded, read-only searches may be retried.
+                if (response.status_code != 429 or
+                        endpoint not in {"/.search/query", "/.search/related"} or
+                        attempt == 2):
+                    break
+                retry_after = response.headers.get("retry-after", "1")
+                delay = int(retry_after) if retry_after.isdigit() else 1
+                time.sleep(min(2, max(1, delay)))
     except httpx.RequestError as exc:
         raise KnowledgeError("SilverBullet 3.0 API is unreachable.") from exc
     if response.status_code in {401, 403}:
@@ -32,7 +43,7 @@ def _api(method: str, endpoint: str, *, payload: dict | None = None) -> dict:
     if response.status_code == 404:
         raise KnowledgeError("SilverBullet 3.0 API endpoint is unavailable. Check version and space mode.")
     if response.status_code == 429:
-        raise KnowledgeError("SilverBullet search is rate limited; retry later.")
+        raise KnowledgeError("SilverBullet search is busy after bounded retries; try again shortly.")
     if response.status_code >= 300:
         raise KnowledgeError(f"SilverBullet 3.0 API returned HTTP {response.status_code}.")
     if len(response.content) > MAX_JSON_BYTES:
