@@ -185,6 +185,37 @@ def _configure_token(http: httpx.Client, token_path: Path) -> None:
         raise KnowledgeError("Minted agent API token cannot reach the Knowledge space.")
 
 
+def _safe_failure_code(error: Exception) -> str:
+    """Stable, allowlisted reason codes; never expose error/HTTP response text."""
+    if not isinstance(error, KnowledgeError):
+        return "transport-or-os"
+    message = str(error)
+    fixed_reasons = {
+        "Required bootstrap credential is not a private regular file.": "secret-permissions",
+        "Required bootstrap credential is unavailable.": "secret-missing",
+        "Required bootstrap credential is empty or malformed.": "secret-invalid",
+        "SilverBullet 3.0 did not become ready for provisioning.": "server-not-ready",
+        "The generated administrator could not authenticate; refusing to change existing server.": "admin-login-refused",
+        "Expected exactly one SilverBullet Knowledge space.": "space-count",
+        "Unrecognized SilverBullet space identifier.": "space-identifier",
+        "Knowledge space folder is not the expected isolated directory.": "space-folder",
+        "Knowledge space would grant anonymous access.": "space-public",
+        "Knowledge space is not bound to the expected root path.": "space-binding",
+        "Existing agent account has unexpected privileges or is disabled.": "agent-privileges",
+        "Existing agent role is not restricted as expected.": "agent-member-role",
+        "Knowledge space permissions failed verification.": "permissions-verification",
+        "Existing SilverBullet agent API token failed authorization; refusing silent rotation.": "token-verification",
+        "Agent API token was previously issued but cannot be recovered from disk.": "token-lost",
+        "Server did not return a valid SilverBullet API token.": "token-format",
+        "Minted agent API token cannot reach the Knowledge space.": "token-access",
+    }
+    if message in fixed_reasons:
+        return fixed_reasons[message]
+    if re.fullmatch(r"SilverBullet provisioning returned HTTP [1-5][0-9]{2}\\.", message):
+        return "provisioning-http-" + message.split()[-1].rstrip(".")
+    return "knowledge-error"
+
+
 def _phase(stage: str) -> None:
     global BOOTSTRAP_PHASE
     BOOTSTRAP_PHASE = stage
@@ -230,6 +261,6 @@ if __name__ == "__main__":
         run()
     except (KnowledgeError, httpx.HTTPError, OSError) as error:
         # Never print HTTP response bodies, request headers, or credentials.
-        print(f"SilverBullet bootstrap failed at {BOOTSTRAP_PHASE}: {type(error).__name__}", flush=True)
+        print(f"SilverBullet bootstrap failed at {BOOTSTRAP_PHASE}: {type(error).__name__} [{_safe_failure_code(error)}]", flush=True)
         raise SystemExit(1)
     print("SilverBullet bootstrap complete (private space, non-admin MCP token).", flush=True)
