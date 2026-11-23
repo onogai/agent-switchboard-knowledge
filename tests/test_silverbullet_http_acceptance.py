@@ -32,6 +32,8 @@ EXPECTED = {
     "notes_search", "notes_read_page", "notes_capture",
     "notes_create_wiki_page", "notes_update_page",
     "notes_list_agent_feedback", "notes_resolve_agent_feedback",
+    "notes_overview", "notes_search_status", "notes_search_ranked",
+    "notes_related_pages",
 }
 TOKEN = "disposable-silverbullet-token"
 
