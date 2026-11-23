@@ -211,7 +211,7 @@ def _safe_failure_code(error: Exception) -> str:
     }
     if message in fixed_reasons:
         return fixed_reasons[message]
-    if re.fullmatch(r"SilverBullet provisioning returned HTTP [1-5][0-9]{2}\\.", message):
+    if re.fullmatch(r"SilverBullet provisioning returned HTTP [1-5][0-9]{2}\.", message):
         return "provisioning-http-" + message.split()[-1].rstrip(".")
     return "knowledge-error"
 
