@@ -15,7 +15,7 @@ services:
         target: /data
       - type: bind
         source: "${SWITCHBOARD_ADDON_STATE:?}/space"
-        target: /data/spaces/knowledge
+        target: /knowledge
     networks:
       addons:
         aliases: ["addon-${SWITCHBOARD_ADDON_INSTANCE}-silverbulletapp"]
