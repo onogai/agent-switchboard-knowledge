@@ -198,7 +198,7 @@ class FullAddonE2EDriverTests(unittest.TestCase):
         import subprocess
         failed = subprocess.CompletedProcess(
             args=["docker", "exec", "-i"], returncode=2,
-            stdout="PRIVATE_PAGE_CONTENT\\nE2E_ACCEPT_FAIL:resolve-feedback:ValueError\\n",
+            stdout="PRIVATE_PAGE_CONTENT\nE2E_ACCEPT_FAIL:resolve-feedback:ValueError\n",
             stderr="PRIVATE_TOKEN_DO_NOT_SHOW",
         )
         with patch.object(e2e.subprocess, "run", return_value=failed):
@@ -213,7 +213,7 @@ class FullAddonE2EDriverTests(unittest.TestCase):
         import subprocess
         failed = subprocess.CompletedProcess(
             args=["docker", "exec", "-i"], returncode=2,
-            stdout="E2E_ACCEPT_FAIL:invalid-phase:Exception\\n",
+            stdout="E2E_ACCEPT_FAIL:invalid-phase:Exception\n",
             stderr="secret",
         )
         with patch.object(e2e.subprocess, "run", return_value=failed):
