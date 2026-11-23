@@ -117,7 +117,7 @@ def _bootstrap_failure(container: str) -> str:
     combined = (proc.stdout + "\n" + proc.stderr)[-24000:]
     markers = re.findall(
         r"SilverBullet bootstrap failed at ([a-z][a-z-]{0,60}): "
-        r"([A-Za-z][A-Za-z0-9_]{0,60}) \\[([a-z][a-z0-9-]{0,60})\\]",
+        r"([A-Za-z][A-Za-z0-9_]{0,60}) \[([a-z][a-z0-9-]{0,60})\]",
         combined,
     )
     if markers:
