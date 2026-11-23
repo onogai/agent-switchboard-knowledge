@@ -314,15 +314,29 @@ class KnowledgeClient:
         try:
             self._request("DELETE", src, etag=etag)
         except KnowledgeError as error:
-            # Roll back only our exact copy, never a newer destination revision.
+            # A network error may mean DELETE *succeeded* but the response
+            # was lost. Never remove the only remaining copy in that case.
+            if "Page changed since it was read." not in str(error):
+                raise KnowledgeError(
+                    "Move outcome uncertain: destination copy preserved. Inspect both pages."
+                ) from error
+            # A 412 also occurs when another writer deleted the source.
+            # Roll back only after confirming some source page still exists.
+            try:
+                self.read_page(source)
+            except KnowledgeError as check:
+                raise KnowledgeError(
+                    "Move conflict: destination copy preserved because source could "
+                    "not be verified. Inspect both pages."
+                ) from check
             try:
                 if not new_etag:
                     raise KnowledgeError("Missing destination revision.")
                 self._request("DELETE", dst, etag=new_etag)
             except KnowledgeError as rollback:
                 raise KnowledgeError(
-                    "Move incomplete: destination copy exists or may have changed; "
-                    "source was not confirmed deleted. Inspect both pages."
+                    "Move conflict: destination copy exists or may have changed; "
+                    "inspect both pages."
                 ) from rollback
             raise KnowledgeError("Move aborted; source changed and destination copy was removed.") from error
         return {"source": src[:-3], "page": dst[:-3], "etag": new_etag,

@@ -23,6 +23,7 @@ class FakeFiles:
     def __init__(self):
         self.files: dict[str, bytes] = {}
         self.fail_source_delete = False
+        self.uncertain_source_delete = False
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         assert request.headers.get("authorization") == "Bearer test-token"
@@ -44,6 +45,9 @@ class FakeFiles:
             self.files[path] = request.content
             return httpx.Response(200, headers={"ETag": revision(request.content)})
         if request.method == "DELETE":
+            if self.uncertain_source_delete and path == "Wiki/Source.md":
+                del self.files[path]
+                raise httpx.ReadTimeout("lost response", request=request)
             if self.fail_source_delete and path == "Wiki/Source.md":
                 return httpx.Response(412)
             if existing is None:
@@ -97,6 +101,15 @@ class PageOperationTests(unittest.TestCase):
             self.client.move_page("Wiki/Source", "Wiki/Destination", revision(source))
         self.assertEqual(source, self.backend.files["Wiki/Source.md"])
         self.assertNotIn("Wiki/Destination.md", self.backend.files)
+
+    def test_move_preserves_copy_if_delete_was_applied_but_ack_lost(self):
+        source = b"# Source\n\nMove me.\n"
+        self.backend.files["Wiki/Source.md"] = source
+        self.backend.uncertain_source_delete = True
+        with self.assertRaisesRegex(KnowledgeError, "destination copy preserved"):
+            self.client.move_page("Wiki/Source", "Wiki/Destination", revision(source))
+        self.assertEqual(source, self.backend.files["Wiki/Destination.md"])
+        self.assertNotIn("Wiki/Source.md", self.backend.files)
 
     def test_move_and_confirmed_delete_require_current_revision(self):
         source = b"# Source\n\nMove me.\n"
