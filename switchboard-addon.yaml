@@ -1,6 +1,7 @@
 schema: 2
 id: silverbullet
 name: SilverBullet Knowledge
+icon: assets/icon.svg
 compose: compose.addon.yaml
 service: silverbulletadapter
 services: silverbulletapp,silverbulletbootstrap,silverbulletadapter
