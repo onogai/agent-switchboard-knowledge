@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from silverbullet_mcp.server import mcp, notes_capture, notes_update_page
+from silverbullet_mcp.server import mcp, notes_capture, notes_update_page, notes_search_ranked
 from silverbullet_mcp.knowledge import search_pages, list_feedback, KnowledgeError
 
 
@@ -25,6 +25,14 @@ class NotesContractTests(unittest.TestCase):
         for t in tools:
             self.assertTrue(len(t.description) >= 85, t.name)
             self.assertTrue(t.name.startswith("notes_"), t.name)
+
+    def test_ranked_search_await_index_defaults_to_false(self):
+        with patch("silverbullet_mcp.server.v3_find", return_value={"items": []}) as find:
+            asyncio.run(notes_search_ranked("family car", "natural", 8))
+            find.assert_called_once_with("family car", "natural", 8, False)
+            find.reset_mock()
+            asyncio.run(notes_search_ranked("family car", "natural", 8, await_index=True))
+            find.assert_called_once_with("family car", "natural", 8, True)
 
     def test_offline_search_and_agent_feedback_do_not_require_core(self):
         with tempfile.TemporaryDirectory() as root:

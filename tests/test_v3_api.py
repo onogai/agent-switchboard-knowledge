@@ -51,6 +51,31 @@ class V3APITests(unittest.TestCase):
                           "scope": "pages", "limit": 8},
                          json.loads(calls[0].content))
 
+    def test_index_wait_is_opt_in(self):
+        calls = []
+        original_client = httpx.Client
+        def handler(request):
+            calls.append(request)
+            return httpx.Response(200, headers={"X-Index-Status": "stale"},
+                                  json={"items": [], "total": 0})
+        transport = httpx.MockTransport(handler)
+        def factory(*args, **kwargs):
+            return original_client(*args, transport=transport, **kwargs)
+        with patch.object(KnowledgeClient, "from_environment", return_value=self.client), patch.object(v3_api.httpx, "Client", side_effect=factory):
+            for mode in ("words", "phrase", "natural"):
+                v3_api.find("family car", mode, 8)
+            v3_api.related("Wiki/Example")
+            v3_api.search_status()
+            result = v3_api.find("family car", "natural", 8, await_index=True)
+        self.assertEqual(6, len(calls))
+        for request in calls[:-1]:
+            self.assertNotIn("x-await-index", request.headers)
+            self.assertEqual("true", request.headers["x-sync-mode"])
+        self.assertEqual("1", calls[-1].headers["x-await-index"])
+        self.assertEqual("stale", result["index_status"])
+        with self.assertRaisesRegex(KnowledgeError, "must be a boolean"):
+            v3_api.find("family car", await_index="false")
+
     def test_validation_precedes_http(self):
         for args in [("x", "words", 10), ("proper query", "invalid", 10),
                      ("proper query", "words", 100)]:

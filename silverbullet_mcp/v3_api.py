@@ -14,14 +14,16 @@ MAX_JSON_BYTES = 200_000
 MODES = {"words", "phrase", "natural"}
 
 
-def _api(method: str, endpoint: str, *, payload: dict | None = None) -> dict:
+def _api(method: str, endpoint: str, *, payload: dict | None = None,
+         await_index: bool = False) -> dict:
     client = KnowledgeClient.from_environment()
     headers = {
         "Authorization": f"Bearer {client._token()}",
         "Accept": "application/json",
         "X-Sync-Mode": "true",
-        "X-Await-Index": "1",
     }
+    if await_index:
+        headers["X-Await-Index"] = "1"
     try:
         with httpx.Client(base_url=client.base_url, timeout=20, follow_redirects=False,
                           trust_env=False) as http:
@@ -54,6 +56,8 @@ def _api(method: str, endpoint: str, *, payload: dict | None = None) -> dict:
         raise KnowledgeError("SilverBullet API response is not JSON.") from exc
     if not isinstance(parsed, dict):
         raise KnowledgeError("SilverBullet API response is not a JSON object.")
+    if await_index and "x-index-status" in response.headers:
+        parsed["index_status"] = response.headers["x-index-status"]
     return parsed
 
 
@@ -70,7 +74,8 @@ def search_status() -> dict:
     return _api("GET", "/.search/status")
 
 
-def find(query: str, mode: str = "words", limit: int = 10) -> dict:
+def find(query: str, mode: str = "words", limit: int = 10,
+         await_index: bool = False) -> dict:
     """Server-side ranked text/semantic search. Never silently claim semantic readiness."""
     if not isinstance(query, str) or not 2 <= len(query.strip()) <= 200:
         raise KnowledgeError("Search query must be 2–200 characters.")
@@ -78,7 +83,9 @@ def find(query: str, mode: str = "words", limit: int = 10) -> dict:
         raise KnowledgeError("Mode must be words, phrase, or natural.")
     if not isinstance(limit, int) or not 1 <= limit <= 30:
         raise KnowledgeError("Limit must be 1–30.")
-    result = _api("POST", "/.search/query",
+    if not isinstance(await_index, bool):
+        raise KnowledgeError("await_index must be a boolean.")
+    result = _api("POST", "/.search/query", await_index=await_index,
                   payload={"query": query.strip(), "mode": mode, "scope": "pages",
                            "limit": limit})
     if not isinstance(result.get("items"), list):

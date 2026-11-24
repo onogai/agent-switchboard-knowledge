@@ -38,6 +38,7 @@ SilverBullet downloads the chosen model and indexes pages asynchronously. Check 
 **Important contracts:**
 
 - `notes_search` remains the legacy local keyword scan. Prefer `notes_search_ranked` for indexed `words`, `phrase`, or `natural` searches.
+- Ranked search uses the available index by default, without requesting catch-up. Recent writes may be missing. Set `await_index=True` for bounded catch-up; `index_status` (when returned) is not a guarantee of embedding freshness. Related, status and overview requests never request catch-up. SilverBullet may still report busy independently.
 - `notes_list_pages` returns bounded paths with prefix/offset pagination, not entire documents; `notes_backlinks` finds **explicit** `[[wiki links]]`, not inferred semantic references.
 - Agent writes are confined to `Inbox/` and `Wiki/`. Content writes reject executable SilverBullet Markdown.
 - Existing-page operations require the **ETag from `notes_read_page`**. `notes_edit_page` replaces exactly one occurrence, `notes_update_page` replaces the whole document, and `notes_delete_page` additionally requires `confirm=true`.

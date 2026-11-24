@@ -94,9 +94,10 @@ async def notes_search_status() -> dict:
     return await asyncio.to_thread(v3_search_status)
 
 
-async def notes_search_ranked(query: str, mode: str = "words", limit: int = 10) -> dict:
-    """Ranked server-index search. 'words' for exact topics, 'phrase' for a quotation, 'natural' for semantic intent (only when enabled). Results may be partial; inspect notice and read source pages."""
-    return await asyncio.to_thread(v3_find, query, mode, limit)
+async def notes_search_ranked(query: str, mode: str = "words", limit: int = 10,
+                              await_index: bool = False) -> dict:
+    """Ranked server-index search. 'words' for exact topics, 'phrase' for a quotation, 'natural' for semantic intent (only when enabled). Uses the available index by default; recent writes may be missing. Set await_index=True to request bounded catch-up, not guaranteed embedding freshness. Inspect index_status (if returned), partial and notice; read source pages."""
+    return await asyncio.to_thread(v3_find, query, mode, limit, await_index)
 
 
 async def notes_related_pages(page: str, limit: int = 5) -> dict:
