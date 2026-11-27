@@ -41,6 +41,37 @@ def page_path(page: str, *, writable: bool = False) -> str:
     return "/".join(parts) + ".md"
 
 
+class PageConflict(KnowledgeError):
+    """A conditional SilverBullet write failed."""
+
+
+def search_exclude_prefixes() -> tuple[str, ...]:
+    raw = os.environ.get("KNOWLEDGE_SEARCH_EXCLUDE_PREFIXES", "Wiki/Reports")
+    return tuple(dict.fromkeys(page_path(part.strip().rstrip("/"))[:-3]
+                               for part in raw.split(",") if part.strip()))
+
+
+def is_excluded(page: str, prefixes: tuple[str, ...]) -> bool:
+    return any(page.startswith(prefix + "/") for prefix in prefixes)
+
+
+def folder_pages(root: Path, prefix: str):
+    """Walk only a named subtree, without following symlinked ancestors."""
+    if not root.is_dir():
+        raise KnowledgeError("Knowledge space is not mounted. Check SilverBullet setup.")
+    directory = root
+    for part in page_path(prefix.rstrip("/"))[:-3].split("/"):
+        directory = directory / part
+        if directory.is_symlink() or not directory.is_dir():
+            return
+    yield from _pages(directory)
+
+
+def excluded_page_names(root: Path, prefixes: tuple[str, ...]) -> list[str]:
+    return sorted({_page_name(path, root)
+                   for prefix in prefixes for path in folder_pages(root, prefix)})
+
+
 def _page_name(path: Path, root: Path) -> str:
     return path.relative_to(root).as_posix()[:-3]
 
@@ -72,7 +103,7 @@ def _validate_content(content: str) -> None:
         raise KnowledgeError("Executable SilverBullet markup is not allowed through MCP writes.")
 
 
-def search_pages(root: Path, query: str, limit: int = 10) -> dict:
+def search_pages(root: Path, query: str, limit: int = 10, include_excluded: bool = False) -> dict:
     query = query.strip()
     if not 2 <= len(query) <= 200:
         raise KnowledgeError("Search query must be 2–200 characters.")
@@ -80,9 +111,10 @@ def search_pages(root: Path, query: str, limit: int = 10) -> dict:
         raise KnowledgeError("Limit must be 1–30.")
     words = [word.casefold() for word in query.split()]
     matches = []
+    prefixes = () if include_excluded else search_exclude_prefixes()
     for path in _pages(root):
         page = _page_name(path, root)
-        if page == "CONFIG" or page.startswith("Library/"):
+        if page == "CONFIG" or page.startswith("Library/") or is_excluded(page, prefixes):
             continue
         content = _read_text(path)
         if content is None:
@@ -230,7 +262,7 @@ class KnowledgeClient:
         except httpx.RequestError as error:
             raise KnowledgeError("SilverBullet is unreachable from the gateway.") from error
         if response.status_code == 412:
-            raise KnowledgeError("Page changed since it was read. Read it again before editing.")
+            raise PageConflict("Page changed since it was read. Read it again before editing.")
         if response.status_code == 404:
             raise KnowledgeError("Page does not exist.")
         if response.status_code in {401, 403}:
@@ -261,13 +293,24 @@ class KnowledgeClient:
         response = self._request("PUT", path, content=body, create=True)
         return {"page": path[:-3], "etag": response.headers.get("etag")}
 
-    def create_page(self, page: str, content: str) -> dict:
+    def create_page(self, page: str, content: str, idempotent: bool = False) -> dict:
         path = page_path(page, writable=True)
         if not path.startswith("Wiki/"):
             raise KnowledgeError("New wiki pages must be under Wiki/.")
         _validate_content(content)
-        response = self._request("PUT", path, content=content, create=True)
-        return {"page": path[:-3], "etag": response.headers.get("etag")}
+        try:
+            response = self._request("PUT", path, content=content, create=True)
+        except PageConflict:
+            if not idempotent:
+                raise
+            existing = self.read_page(path[:-3])
+            if existing["content"] != content:
+                raise KnowledgeError("Page already exists with different content; it was not overwritten.")
+            return {"page": path[:-3], "etag": existing["etag"], "created": False}
+        result = {"page": path[:-3], "etag": response.headers.get("etag")}
+        if idempotent:
+            result["created"] = True
+        return result
 
     def update_page(self, page: str, content: str, etag: str) -> dict:
         path = page_path(page, writable=True)

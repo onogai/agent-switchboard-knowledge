@@ -17,6 +17,7 @@ from fastmcp.server.auth import AccessToken, TokenVerifier
 from mcp.types import ToolAnnotations
 
 from .knowledge import KnowledgeClient, KnowledgeError, list_feedback, search_pages, list_pages, backlinks
+from .documents import query_pages
 from .v3_api import overview as v3_overview, search_status as v3_search_status, find as v3_find, related as v3_related
 
 
@@ -66,16 +67,27 @@ def _authentication() -> TokenVerifier | None:
 mcp = FastMCP("Switchboard SilverBullet", auth=_authentication())
 
 
-async def notes_search(query: str, limit: int = 10) -> dict:
-    """Use to locate notes by keywords; returns page paths and excerpts, not full Markdown. Query must be 2–200 characters, limit 1–30. Read a matching page using notes_read_page."""
+async def notes_search(query: str, limit: int = 10, include_excluded: bool = False) -> dict:
+    """Use to locate notes by keywords; returns page paths and excerpts, not full Markdown. Query must be 2–200 characters, limit 1–30. Read a matching page using notes_read_page. Report folders are excluded unless include_excluded=True."""
     client = KnowledgeClient.from_environment()
-    return await asyncio.to_thread(search_pages, client.root, query, limit)
+    return await asyncio.to_thread(search_pages, client.root, query, limit, include_excluded)
 
 
 async def notes_list_pages(prefix: str = "", limit: int = 50, offset: int = 0) -> dict:
     """Browse actual Markdown page paths, optionally limited to a folder subtree such as Wiki/Automobiles. Returns a bounded page list and pagination details."""
     client = KnowledgeClient.from_environment()
     return await asyncio.to_thread(list_pages, client.root, prefix, limit, offset)
+
+
+async def notes_query_pages(prefix: str, date_from: str, date_to: str,
+                            date_field: str = "date", metadata_equals: dict[str, str] | None = None,
+                            fields: list[str] | None = None, include_content: bool = False,
+                            limit: int = 30, offset: int = 0, max_bytes: int = 60000) -> dict:
+    """Retrieve dated Markdown documents in a folder subtree using YAML frontmatter, not file modification time or the search index. Inclusive YYYY-MM-DD dates; date_field defaults to date. metadata_equals matches scalar values or membership in scalar lists (e.g. tags). fields selects metadata keys (None=all, []=none); include_content includes Markdown bodies. Newest date first, then page path. Follow next_offset when truncated; max_bytes bounds the JSON response. Includes search-excluded folders."""
+    client = KnowledgeClient.from_environment()
+    return await asyncio.to_thread(query_pages, client.root, prefix, date_from, date_to,
+                                   date_field, metadata_equals, fields, include_content,
+                                   limit, offset, max_bytes)
 
 
 async def notes_backlinks(page: str, limit: int = 30) -> dict:
@@ -95,14 +107,14 @@ async def notes_search_status() -> dict:
 
 
 async def notes_search_ranked(query: str, mode: str = "words", limit: int = 10,
-                              await_index: bool = False) -> dict:
-    """Ranked server-index search. 'words' for exact topics, 'phrase' for a quotation, 'natural' for semantic intent (only when enabled). Uses the available index by default; recent writes may be missing. Set await_index=True to request bounded catch-up, not guaranteed embedding freshness. Inspect index_status (if returned), partial and notice; read source pages."""
-    return await asyncio.to_thread(v3_find, query, mode, limit, await_index)
+                              await_index: bool = False, include_excluded: bool = False) -> dict:
+    """Ranked server-index search. 'words' for exact topics, 'phrase' for a quotation, 'natural' for semantic intent (only when enabled). Uses the available index by default; recent writes may be missing. Set await_index=True to request bounded catch-up, not guaranteed embedding freshness. Inspect index_status (if returned), partial and notice; read source pages. Configured report folders are excluded unless include_excluded=True."""
+    return await asyncio.to_thread(v3_find, query, mode, limit, await_index, include_excluded)
 
 
-async def notes_related_pages(page: str, limit: int = 5) -> dict:
-    """Find pages semantically related to a known page (requires enabled, ready semantic search). Read matching pages before using them as facts."""
-    return await asyncio.to_thread(v3_related, page, limit)
+async def notes_related_pages(page: str, limit: int = 5, include_excluded: bool = False) -> dict:
+    """Find pages semantically related to a known page (requires enabled, ready semantic search). Read matching pages before using them as facts. Configured report folders are excluded unless include_excluded=True."""
+    return await asyncio.to_thread(v3_related, page, limit, include_excluded)
 
 
 async def notes_read_page(page: str) -> dict:
@@ -124,10 +136,10 @@ async def notes_capture(title: str, content: str) -> dict:
     return await asyncio.to_thread(KnowledgeClient.from_environment().create_note, title, content)
 
 
-async def notes_create_wiki_page(page: str, content: str) -> dict:
-    """Create a named Wiki/ page with complete Markdown, refusing to overwrite existing pages. Use notes_capture to store unstructured quick notes in Inbox/."""
+async def notes_create_wiki_page(page: str, content: str, idempotent: bool = False) -> dict:
+    """Create a named Wiki/ page with complete Markdown, refusing to overwrite existing pages. Use notes_capture to store unstructured quick notes in Inbox/. For recurring documents use a deterministic path and idempotent=True: an identical existing document succeeds without rewriting; different content conflicts."""
     _require_write_mode()
-    return await asyncio.to_thread(KnowledgeClient.from_environment().create_page, page, content)
+    return await asyncio.to_thread(KnowledgeClient.from_environment().create_page, page, content, idempotent)
 
 
 async def notes_update_page(page: str, content: str, etag: str) -> dict:
@@ -171,12 +183,12 @@ async def notes_resolve_agent_feedback(page: str, feedback_id: str, etag: str) -
     return await asyncio.to_thread(client.resolve_feedback, page, feedback_id, etag)
 
 
-_READ_ONLY = {"notes_search", "notes_read_page", "notes_list_agent_feedback", "notes_overview", "notes_search_status", "notes_search_ranked", "notes_related_pages", "notes_list_pages", "notes_backlinks"}
+_READ_ONLY = {"notes_query_pages", "notes_search", "notes_read_page", "notes_list_agent_feedback", "notes_overview", "notes_search_status", "notes_search_ranked", "notes_related_pages", "notes_list_pages", "notes_backlinks"}
 _DESTRUCTIVE = {"notes_update_page", "notes_edit_page", "notes_move_page", "notes_delete_page", "notes_resolve_agent_feedback"}
 
 for _tool in (
     notes_search, notes_read_page, notes_overview, notes_search_status,
-    notes_search_ranked, notes_related_pages, notes_list_pages, notes_backlinks,
+    notes_search_ranked, notes_related_pages, notes_list_pages, notes_backlinks, notes_query_pages,
     notes_capture, notes_create_wiki_page, notes_update_page, notes_edit_page,
     notes_move_page, notes_delete_page,
     notes_list_agent_feedback, notes_resolve_agent_feedback,

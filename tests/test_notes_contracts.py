@@ -10,7 +10,7 @@ from silverbullet_mcp.knowledge import search_pages, list_feedback, KnowledgeErr
 
 
 EXPECTED = {
-    "notes_search", "notes_read_page", "notes_capture",
+    "notes_search", "notes_read_page", "notes_capture", "notes_query_pages",
     "notes_create_wiki_page", "notes_update_page",
     "notes_list_agent_feedback", "notes_resolve_agent_feedback",
     "notes_overview", "notes_search_status", "notes_search_ranked", "notes_related_pages", "notes_list_pages", "notes_backlinks",
@@ -29,10 +29,10 @@ class NotesContractTests(unittest.TestCase):
     def test_ranked_search_await_index_defaults_to_false(self):
         with patch("silverbullet_mcp.server.v3_find", return_value={"items": []}) as find:
             asyncio.run(notes_search_ranked("family car", "natural", 8))
-            find.assert_called_once_with("family car", "natural", 8, False)
+            find.assert_called_once_with("family car", "natural", 8, False, False)
             find.reset_mock()
             asyncio.run(notes_search_ranked("family car", "natural", 8, await_index=True))
-            find.assert_called_once_with("family car", "natural", 8, True)
+            find.assert_called_once_with("family car", "natural", 8, True, False)
 
     def test_offline_search_and_agent_feedback_do_not_require_core(self):
         with tempfile.TemporaryDirectory() as root:

@@ -62,6 +62,7 @@ services:
       SILVERBULLET_MCP_BIND_HOST: "0.0.0.0"
       SILVERBULLET_MCP_TOKEN_FILE: /run/secrets/silverbullet-mcp-token
       KNOWLEDGE_SPACE_DIR: /knowledge
+      KNOWLEDGE_SEARCH_EXCLUDE_PREFIXES: "${KNOWLEDGE_SEARCH_EXCLUDE_PREFIXES-Wiki/Reports}"
       SILVERBULLET_MCP_WRITE_ENABLED: "true"
       KNOWLEDGE_TOKEN_FILE: /run/secrets/silverbullet-token
       KNOWLEDGE_BASE_URL: "http://addon-${SWITCHBOARD_ADDON_INSTANCE}-silverbulletapp:3000"

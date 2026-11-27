@@ -179,7 +179,7 @@ async def main():
     async with Client("http://127.0.0.1:8773/mcp", timeout=5, auth=token) as client:
         tools = await client.list_tools()
         assert {t.name for t in tools} == {
-            "notes_search", "notes_read_page", "notes_capture",
+            "notes_search", "notes_read_page", "notes_capture", "notes_query_pages",
             "notes_create_wiki_page", "notes_update_page",
             "notes_list_agent_feedback", "notes_resolve_agent_feedback",
             "notes_overview", "notes_search_status", "notes_search_ranked",
@@ -535,7 +535,7 @@ def run() -> dict:
                 "installer_style_compose_wait_verified": True,
                 "private_internal_network": True,
                 "host_ports_published": False,
-                "mcp_tools_tested": 16,
+                "mcp_tools_tested": 17,
                 "mcp_bearer_required": True,
                 "mcp_anonymous_and_invalid_rejected": True,
                 "read_write_etag_feedback_verified": True,
