@@ -19,6 +19,7 @@ ADMIN = "admin"
 AGENT = "switchboard-agent"
 SPACE = "Knowledge"
 SPACE_FOLDER = "/knowledge"
+SPACE_PREFIX = "/knowledge"
 REPORTS_FOLDER = "/reports"
 REPORTS_PREFIX = "/reports"
 TOKEN_NAME = "switchboard-addon"
@@ -135,20 +136,28 @@ def _configure_agent(http: httpx.Client, agentpass: str) -> None:
         raise KnowledgeError("Knowledge space would grant anonymous access.")
     binding = config.get("binding", {})
     # SilverBullet normalizes root prefix "/" to "" when saving spaces.json.
-    if not isinstance(binding, dict) or set(binding) != {"prefix"} or binding["prefix"] not in ("", "/"):
-        raise KnowledgeError("Knowledge space is not bound to the expected root path.")
+    if not isinstance(binding, dict) or set(binding) != {"prefix"} or binding["prefix"] not in ("", "/", SPACE_PREFIX):
+        raise KnowledgeError("Knowledge space is not bound to the expected path.")
     members = config.get("members") or {}
     expected = {"role": "write", "runtimeApi": False}
+    changes = {}
     if AGENT not in members:
-        _patch(http, f"/.dashboard/api/admin/spaces/{ident}",
-               {"members": {**members, AGENT: expected}})
+        changes["members"] = {**members, AGENT: expected}
     else:
         actual = members[AGENT]
         if actual.get("role") != "write" or actual.get("runtimeApi") is not False:
             raise KnowledgeError("Existing agent role is not restricted as expected.")
+    # Root and prefixed bindings cannot coexist on one hostname. Change
+    # only the binding, preserving the existing space ID, files and members.
+    if binding["prefix"] != SPACE_PREFIX:
+        changes["binding"] = {"prefix": SPACE_PREFIX}
+    if changes:
+        _patch(http, f"/.dashboard/api/admin/spaces/{ident}", changes)
     current = _get(http, f"/.dashboard/api/admin/spaces/{ident}")
     member = (current.get("members") or {}).get(AGENT) or {}
     if (current.get("access", "none") != "none"
+            or current.get("binding") != {"prefix": SPACE_PREFIX}
+            or current.get("folder") != SPACE_FOLDER
             or member.get("role") != "write"
             or member.get("runtimeApi") is not False):
         raise KnowledgeError("Knowledge space permissions failed verification.")
@@ -217,7 +226,7 @@ def _token_probe(token: str) -> bool:
     # Never reuse the bootstrap admin session cookie for token verification.
     with httpx.Client(base_url=BASE, timeout=5, follow_redirects=False,
                       trust_env=False) as probe:
-        for prefix in ("", REPORTS_PREFIX):
+        for prefix in (SPACE_PREFIX, REPORTS_PREFIX):
             response = probe.get(prefix + "/.help", headers={"Authorization": f"Bearer {token}"})
             if response.status_code != 200:
                 return False
@@ -271,7 +280,7 @@ def _safe_failure_code(error: Exception) -> str:
         "Unrecognized SilverBullet space identifier.": "space-identifier",
         "Knowledge space folder is not the expected isolated directory.": "space-folder",
         "Knowledge space would grant anonymous access.": "space-public",
-        "Knowledge space is not bound to the expected root path.": "space-binding",
+        "Knowledge space is not bound to the expected path.": "space-binding",
         "Existing agent account has unexpected privileges or is disabled.": "agent-privileges",
         "Existing agent role is not restricted as expected.": "agent-member-role",
         "Knowledge space permissions failed verification.": "permissions-verification",
@@ -320,7 +329,7 @@ def run() -> None:
             _phase("create-admin-and-space")
             response = http.post("/.setup/api/complete", json={
                 "adminUsername": ADMIN, "adminPassword": adminpass,
-                "space": {"name": SPACE, "prefix": "/",
+                "space": {"name": SPACE, "prefix": SPACE_PREFIX,
                           "folder": SPACE_FOLDER,
                           "revisions": "unmanaged", "starter": {"type": "none"}},
             })

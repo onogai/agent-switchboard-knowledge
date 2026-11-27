@@ -85,7 +85,7 @@ class DocumentTests(unittest.TestCase):
                 v3_api.find("garden", space="reports")
                 KnowledgeClient.from_environment("reports").create_page("News/a", "body")
                 KnowledgeClient.from_environment("reports").read_page("News/a")
-            self.assertEqual(["/.search/query", "/reports/.search/query",
+            self.assertEqual(["/knowledge/.search/query", "/reports/.search/query",
                               "/reports/.fs/News/a.md", "/reports/.fs/News/a.md"],
                              [r.url.path for r in calls])
             self.assertTrue(all(r.headers["authorization"] == "Bearer test-token" for r in calls))

@@ -80,9 +80,11 @@ not a snapshot: retry if concurrent writes change the result set.
 All tools default to `space="knowledge"`; explicitly use `space="reports"`
 for operational documents. Reports is a second native SilverBullet space at
 `/reports/` with independent full-text search and semantic search disabled.
-No exclusion lists are needed. The same agent token is authorized in both
+Knowledge is served at `/knowledge/` and the root URL opens the Dashboard.
+The first upgrade changes the existing Knowledge URL binding in place via the
+Admin API; its ID, files and membership are retained. No exclusion lists are needed. The same agent token is authorized in both
 spaces. Bootstrap creates Reports if missing and otherwise verifies its
-settings, preserving existing Knowledge documents, bindings and token.
+settings, preserving existing Knowledge documents, ID and token.
 Both spaces have separate persistent bind mounts and manifest state directories.
 
 ## Install and update

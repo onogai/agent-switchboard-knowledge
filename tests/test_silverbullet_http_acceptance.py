@@ -48,9 +48,9 @@ def fake_api(space: Path):
 
         def _target(self):
             url = unquote(urlsplit(self.path).path)
-            if not url.startswith("/.fs/"):
+            if not url.startswith("/knowledge/.fs/"):
                 return None
-            relative = url.removeprefix("/.fs/")
+            relative = url.removeprefix("/knowledge/.fs/")
             parts = relative.split("/")
             if (not all(parts) or
                 any(part in {".", ".."} for part in parts) or

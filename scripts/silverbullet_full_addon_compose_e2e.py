@@ -289,10 +289,10 @@ from pathlib import Path
 base = os.environ["KNOWLEDGE_BASE_URL"]
 token = Path(os.environ["KNOWLEDGE_TOKEN_FILE"]).read_text().strip()
 with httpx.Client(timeout=8, trust_env=False) as client:
-    anonymous = client.get(base + "/.fs/Wiki/E2E-Sentinel.md",
+    anonymous = client.get(base + "/knowledge/.fs/Wiki/E2E-Sentinel.md",
                            headers={"X-Sync-Mode": "true"})
     assert anonymous.status_code in (401, 403), anonymous.status_code
-    authorized = client.get(base + "/.fs/Wiki/E2E-Sentinel.md",
+    authorized = client.get(base + "/knowledge/.fs/Wiki/E2E-Sentinel.md",
                             headers={"Authorization": "Bearer " + token,
                                      "X-Sync-Mode": "true"})
     assert authorized.status_code == 200, authorized.status_code
@@ -519,6 +519,9 @@ def run() -> dict:
             entries = spaces.get("spaces", spaces)
             if not any(v.get("name") == "Knowledge" for v in entries.values() if isinstance(v, dict)):
                 raise AcceptanceError("Knowledge space was not initialized")
+            knowledge_entries = [v for v in entries.values() if isinstance(v, dict) and v.get("name") == "Knowledge"]
+            if len(knowledge_entries) != 1 or knowledge_entries[0].get("binding") != {"prefix": "/knowledge"}:
+                raise AcceptanceError("Knowledge binding was not initialized")
             report_entries = [v for v in entries.values() if isinstance(v, dict) and v.get("name") == "Reports"]
             if len(report_entries) != 1 or report_entries[0].get("semanticSearch") is not False:
                 raise AcceptanceError("Reports space was not initialized with semantic search disabled")

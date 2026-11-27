@@ -218,7 +218,7 @@ class KnowledgeClient:
             raise KnowledgeError("Space must be knowledge or reports.")
         base = os.environ.get("KNOWLEDGE_BASE_URL", "http://silverbullet:3000").rstrip("/")
         return cls(
-            base + ("/reports" if space == "reports" else ""),
+            base + ("/reports" if space == "reports" else "/knowledge"),
             Path(os.environ.get("KNOWLEDGE_TOKEN_FILE", "/home/ubuntu/silverbullet-api-token")),
             Path(os.environ.get("REPORTS_SPACE_DIR", "/reports") if space == "reports"
                  else os.environ.get("KNOWLEDGE_SPACE_DIR", "/knowledge")),

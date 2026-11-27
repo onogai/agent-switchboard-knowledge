@@ -42,7 +42,7 @@ class FakeV3:
             self.users["admin"] = {"admin": True, "disabled": False, "tokens": {}}
             self.spaces["00000000-0000-4000-8000-000000000001"] = {
                 "name": "Knowledge", "folder": "/knowledge",
-                "binding": {"prefix": ""}, "access": "none", "members": {},
+                "binding": {"prefix": payload["space"]["prefix"]}, "access": "none", "members": {},
             }
             return ok({"status": "ok"})
         if path == "/.dashboard/api/login" and method == "POST":
@@ -53,10 +53,10 @@ class FakeV3:
             if not self.setup:
                 return ok({}, 307, headers={"location": "/.setup/"})
             return ok({"admin": True}, 200) if "session=safe" in req.headers.get("cookie", "") else ok({}, 401)
-        if path in ("/.help", "/reports/.help"):
+        if path in ("/.help", "/knowledge/.help", "/reports/.help"):
             token = req.headers.get("authorization", "").removeprefix("Bearer ")
             space_name = "Reports" if path.startswith("/reports/") else "Knowledge"
-            allowed = any(cfg["name"] == space_name and "switchboard-agent" in cfg["members"]
+            allowed = any(cfg["name"] == space_name and cfg["binding"]["prefix"].rstrip("/") + "/.help" == path and "switchboard-agent" in cfg["members"]
                           for cfg in self.spaces.values())
             if self.tokens.get(token) == "switchboard-agent" and allowed:
                 return ok({"version": 1, "outline": {"folders": []}})
@@ -82,6 +82,8 @@ class FakeV3:
         if endpoint == "spaces" and method == "POST":
             ident = "00000000-0000-4000-8000-000000000002"
             assert ident not in self.spaces
+            if any(cfg["binding"]["prefix"] in ("", "/") for cfg in self.spaces.values()):
+                return ok({"errors": [{"field": "binding", "message": "root conflicts with prefix"}]}, 400)
             self.spaces[ident] = {key: value for key, value in payload.items()
                                   if key not in {"starter", "seedIndex"}}
             self.reports_creates += 1
@@ -149,6 +151,7 @@ class SilverBullet3BootstrapTests(unittest.TestCase):
         self.assertEqual(1, self.backend.model_changes)
         space = next(iter(self.backend.spaces.values()))
         self.assertEqual("none", space["access"])
+        self.assertEqual({"prefix": "/knowledge"}, space["binding"])
         self.assertEqual({"role": "write", "runtimeApi": False},
                          space["members"]["switchboard-agent"])
         self.assertEqual("sbt_" + "a"*64, (self.secrets / "token").read_text().strip())
@@ -163,6 +166,7 @@ class SilverBullet3BootstrapTests(unittest.TestCase):
         original_root = json.loads(json.dumps(self.backend.spaces[root_id]))
         original_token = (self.secrets / "token").read_text()
         del self.backend.spaces[reports_id]  # simulate previous single-space release
+        self.backend.spaces[root_id]["binding"] = {"prefix": ""}
         self.backend.reports_creates = 0
         before = self.backend.space_patches
         bootstrap.run()
@@ -176,7 +180,7 @@ class SilverBullet3BootstrapTests(unittest.TestCase):
         self.assertEqual(original_token, (self.secrets / "token").read_text())
         bootstrap.run()
         self.assertEqual(1, self.backend.reports_creates)
-        self.assertEqual(before, self.backend.space_patches)
+        self.assertEqual(before + 1, self.backend.space_patches)
         self.assertEqual(1, self.backend.mint_count)
         self.assertEqual(1, self.backend.model_changes)
 
