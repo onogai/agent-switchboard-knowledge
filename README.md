@@ -1,6 +1,6 @@
 # Switchboard Knowledge — SilverBullet 3 add-on
 
-Standalone [Switchboard](https://github.com/onogai/agent-switchboard) add-on built on the official **SilverBullet 3.0 edge-slim** image. It provides a private, human-readable Markdown knowledge space and a bearer-authenticated MCP endpoint.
+Standalone [Switchboard](https://github.com/onogai/agent-switchboard) add-on built on the official **SilverBullet 3.0 edge-slim** image. It provides two private, human-readable Markdown spaces (Knowledge and Reports) and a bearer-authenticated MCP endpoint.
 
 Existing add-on ID **silverbullet** and instance names are intentionally unchanged. Upgrading an installed SilverBullet 3 add-on does **not** migrate, rename or rewrite the Markdown files.
 
@@ -12,7 +12,7 @@ Three private Compose services, with no published host ports:
 - **silverbulletbootstrap:** idempotently provisions SilverBullet 3 and its search model using the authenticated admin API, then exits.
 - **silverbulletadapter:** FastMCP server with a dedicated bearer token, a non-admin SilverBullet API token, and read-only local Markdown visibility for browsing.
 
-The installer owns persistent state at `server/` (accounts, model, indexes), `space/` (Markdown notes and attachments), and private `secrets/`. Containers have read-only roots, no Linux capabilities, and only private-network access. The agent's upstream account is restricted to write access to the private Knowledge space, **without Runtime API**. The adapter never proxies arbitrary SilverBullet shell, runtime or admin methods.
+The installer owns persistent state at `server/` (accounts, model, indexes), `space/` (Knowledge notes and attachments), `reports/` (operational documents), and private `secrets/`. Containers have read-only roots, no Linux capabilities, and only private-network access. The agent's upstream account is restricted to write access to the private Knowledge and Reports spaces, **without Runtime API**. The adapter never proxies arbitrary SilverBullet shell, runtime or admin methods.
 
 ## Automatic semantic search
 
@@ -40,7 +40,7 @@ SilverBullet downloads the chosen model and indexes pages asynchronously. Check 
 - `notes_search` remains the legacy local keyword scan. Prefer `notes_search_ranked` for indexed `words`, `phrase`, or `natural` searches.
 - Ranked search uses the available index by default, without requesting catch-up. Recent writes may be missing. Set `await_index=True` for bounded catch-up; `index_status` (when returned) is not a guarantee of embedding freshness. Related, status and overview requests never request catch-up. SilverBullet may still report busy independently.
 - `notes_list_pages` returns bounded paths with prefix/offset pagination, not entire documents; `notes_backlinks` finds **explicit** `[[wiki links]]`, not inferred semantic references.
-- Agent writes are confined to `Inbox/` and `Wiki/`. Content writes reject executable SilverBullet Markdown.
+- Knowledge writes are confined to `Inbox/` and `Wiki/`; Reports writes can use ordinary document paths outside protected Library/ and CONFIG. Content writes reject executable SilverBullet Markdown.
 - Existing-page operations require the **ETag from `notes_read_page`**. `notes_edit_page` replaces exactly one occurrence, `notes_update_page` replaces the whole document, and `notes_delete_page` additionally requires `confirm=true`.
 - `notes_move_page` copies to a new path, then deletes the source under its ETag. It attempts to remove the new copy if the source revision changes. This is not an atomic server-side rename, and **links pointing to the old page are not rewritten**.
 - Transient SilverBullet `SearchError::Busy` HTTP 429 is retried at most twice for search/related reads (respecting a bounded `Retry-After`). Persistent busy errors are reported as busy, not as account quotas.
@@ -48,7 +48,7 @@ SilverBullet downloads the chosen model and indexes pages asynchronously. Check 
 ## Recurring documents
 
 Store separate immutable reports under a dedicated folder, for example
-`Wiki/Reports/News/2026-11-27-morning`, with YAML frontmatter:
+`News/2026-11-27-morning`, with YAML frontmatter:
 
 ```markdown
 ---
@@ -59,11 +59,11 @@ tags: [news, morning]
 Report text.
 ```
 
-Use `notes_create_wiki_page(page, content, idempotent=true)` with a stable
+Use `notes_create_wiki_page(page, content, space="reports", idempotent=true)` with a stable
 path per scheduled occurrence. An identical retry succeeds without rewriting;
 different content is a conflict, never silently overwritten.
 
-`notes_query_pages(prefix="Wiki/Reports/News", date_from="2026-11-26",
+`notes_query_pages(space="reports", prefix="News", date_from="2026-11-26",
 date_to="2026-11-27", fields=["date", "tags"], include_content=true)`
 retrieves matching documents in one call, newest date first with path as a
 tie-breaker. The inclusive date range uses the frontmatter `date` field
@@ -77,14 +77,13 @@ The filesystem is scanned only within the selected subtree; this does not
 require index catch-up or create an additional index. Offset pagination is
 not a snapshot: retry if concurrent writes change the result set.
 
-Regular lexical, ranked and related searches exclude the `Wiki/Reports/`
-subtree by default. Set `KNOWLEDGE_SEARCH_EXCLUDE_PREFIXES` to a comma-separated
-list of folder paths (empty disables exclusions). Ranked/related searches
-send exact excluded page names to SilverBullet before ranking and also
-defensively filter stale results. The exclusion list grows with the number
-of operational pages; embeddings are still generated by SilverBullet.
-Explicit searches can set `include_excluded=true`. Listing, direct reading,
-structured retrieval and human navigation are unaffected.
+All tools default to `space="knowledge"`; explicitly use `space="reports"`
+for operational documents. Reports is a second native SilverBullet space at
+`/reports/` with independent full-text search and semantic search disabled.
+No exclusion lists are needed. The same agent token is authorized in both
+spaces. Bootstrap creates Reports if missing and otherwise verifies its
+settings, preserving existing Knowledge documents, bindings and token.
+Both spaces have separate persistent bind mounts and manifest state directories.
 
 ## Install and update
 
@@ -95,7 +94,7 @@ For an empty new instance, using a Switchboard version with schema-v2 add-on sup
 ./switchboard addons
 ```
 
-For an **existing** SilverBullet 3 instance, use the normal Switchboard add-on update procedure on the same instance. Keep its existing `server/`, `space/` and `secrets/` directories. **Do not run the SilverBullet 2 → 3 migration again**. The bootstrap recognizes the configured accounts, space, token and model, and applies only necessary changes. New tools may require enabling their grants in Switchboard Manager.
+For an **existing** SilverBullet 3 instance, use the normal Switchboard add-on update procedure on the same instance. Keep its existing `server/`, `space/` and `secrets/` directories. The installer creates the new `reports/` state directory. **Do not run the SilverBullet 2 → 3 migration again**. The bootstrap recognizes the configured accounts, space, token and model, and applies only necessary changes. New tools may require enabling their grants in Switchboard Manager.
 
 For a genuinely old 2.12 installation, see [docs/silverbullet-3-migration.md](docs/silverbullet-3-migration.md); that migration is a separate, one-time task.
 
