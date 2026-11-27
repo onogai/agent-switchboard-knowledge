@@ -19,6 +19,9 @@ ADMIN = "admin"
 AGENT = "switchboard-agent"
 SPACE = "Knowledge"
 SPACE_FOLDER = "/knowledge"
+SPACE_PREFIX = "/knowledge"
+REPORTS_FOLDER = "/reports"
+REPORTS_PREFIX = "/reports"
 TOKEN_NAME = "switchboard-addon"
 SEMANTIC_MODEL = os.environ.get("KNOWLEDGE_SEMANTIC_MODEL", "granite-embedding-97m-multilingual-r2").strip()
 SUPPORTED_MODELS = {"off", "granite-embedding-97m-multilingual-r2", "multilingual-e5-small"}
@@ -133,23 +136,76 @@ def _configure_agent(http: httpx.Client, agentpass: str) -> None:
         raise KnowledgeError("Knowledge space would grant anonymous access.")
     binding = config.get("binding", {})
     # SilverBullet normalizes root prefix "/" to "" when saving spaces.json.
-    if not isinstance(binding, dict) or set(binding) != {"prefix"} or binding["prefix"] not in ("", "/"):
-        raise KnowledgeError("Knowledge space is not bound to the expected root path.")
+    if not isinstance(binding, dict) or set(binding) != {"prefix"} or binding["prefix"] not in ("", "/", SPACE_PREFIX):
+        raise KnowledgeError("Knowledge space is not bound to the expected path.")
     members = config.get("members") or {}
     expected = {"role": "write", "runtimeApi": False}
+    changes = {}
     if AGENT not in members:
-        _patch(http, f"/.dashboard/api/admin/spaces/{ident}",
-               {"members": {**members, AGENT: expected}})
+        changes["members"] = {**members, AGENT: expected}
     else:
         actual = members[AGENT]
         if actual.get("role") != "write" or actual.get("runtimeApi") is not False:
             raise KnowledgeError("Existing agent role is not restricted as expected.")
+    # Root and prefixed bindings cannot coexist on one hostname. Change
+    # only the binding, preserving the existing space ID, files and members.
+    if binding["prefix"] != SPACE_PREFIX:
+        changes["binding"] = {"prefix": SPACE_PREFIX}
+    if changes:
+        _patch(http, f"/.dashboard/api/admin/spaces/{ident}", changes)
     current = _get(http, f"/.dashboard/api/admin/spaces/{ident}")
     member = (current.get("members") or {}).get(AGENT) or {}
     if (current.get("access", "none") != "none"
+            or current.get("binding") != {"prefix": SPACE_PREFIX}
+            or current.get("folder") != SPACE_FOLDER
             or member.get("role") != "write"
             or member.get("runtimeApi") is not False):
         raise KnowledgeError("Knowledge space permissions failed verification.")
+
+
+def _configure_reports(http: httpx.Client) -> None:
+    """Provision the second space once, without moving or modifying Knowledge."""
+    endpoint = "/.dashboard/api/admin/spaces"
+    expected = {"role": "write", "runtimeApi": False}
+    spaces = _get(http, endpoint)
+    matches = [(ident, cfg) for ident, cfg in spaces.items()
+               if isinstance(cfg, dict) and cfg.get("name") == "Reports"]
+    if not matches:
+        created = _post(http, endpoint, {
+            "name": "Reports", "folder": REPORTS_FOLDER,
+            "binding": {"prefix": REPORTS_PREFIX},
+            "access": "none", "members": {AGENT: expected},
+            "semanticSearch": False, "revisions": "unmanaged",
+            "starter": {"type": "none"}, "seedIndex": False,
+        })
+        ident = created.get("id")
+    elif len(matches) == 1:
+        ident = matches[0][0]
+    else:
+        raise KnowledgeError("Expected exactly one Reports space.")
+    if not isinstance(ident, str) or not re.fullmatch(r"[a-f0-9-]{36}", ident):
+        raise KnowledgeError("Unrecognized Reports space identifier.")
+    resource = f"{endpoint}/{ident}"
+    cfg = _get(http, resource)
+    if (cfg.get("name") != "Reports" or cfg.get("folder") != REPORTS_FOLDER
+            or cfg.get("binding") != {"prefix": REPORTS_PREFIX}
+            or cfg.get("access", "none") != "none" or cfg.get("readOnly", False)):
+        raise KnowledgeError("Existing Reports space has unexpected configuration.")
+    members = cfg.get("members") or {}
+    changes = {}
+    if AGENT not in members:
+        changes["members"] = {**members, AGENT: expected}
+    elif members[AGENT] != expected:
+        raise KnowledgeError("Existing Reports agent role is not restricted as expected.")
+    if cfg.get("semanticSearch") is not False:
+        changes["semanticSearch"] = False
+    if changes:
+        _patch(http, resource, changes)
+    current = _get(http, resource)
+    if ((current.get("members") or {}).get(AGENT) != expected
+            or current.get("semanticSearch") is not False
+            or current.get("access", "none") != "none"):
+        raise KnowledgeError("Reports space configuration failed verification.")
 
 
 def _configure_semantic_search(http: httpx.Client) -> None:
@@ -170,11 +226,12 @@ def _token_probe(token: str) -> bool:
     # Never reuse the bootstrap admin session cookie for token verification.
     with httpx.Client(base_url=BASE, timeout=5, follow_redirects=False,
                       trust_env=False) as probe:
-        response = probe.get("/.help", headers={"Authorization": f"Bearer {token}"})
-        if response.status_code == 200:
+        for prefix in (SPACE_PREFIX, REPORTS_PREFIX):
+            response = probe.get(prefix + "/.help", headers={"Authorization": f"Bearer {token}"})
+            if response.status_code != 200:
+                return False
             _expect(response)
-            return True
-        return False
+        return True
 
 
 def _configure_token(http: httpx.Client, token_path: Path) -> None:
@@ -223,7 +280,7 @@ def _safe_failure_code(error: Exception) -> str:
         "Unrecognized SilverBullet space identifier.": "space-identifier",
         "Knowledge space folder is not the expected isolated directory.": "space-folder",
         "Knowledge space would grant anonymous access.": "space-public",
-        "Knowledge space is not bound to the expected root path.": "space-binding",
+        "Knowledge space is not bound to the expected path.": "space-binding",
         "Existing agent account has unexpected privileges or is disabled.": "agent-privileges",
         "Existing agent role is not restricted as expected.": "agent-member-role",
         "Knowledge space permissions failed verification.": "permissions-verification",
@@ -231,6 +288,11 @@ def _safe_failure_code(error: Exception) -> str:
         "Agent API token was previously issued but cannot be recovered from disk.": "token-lost",
         "Server did not return a valid SilverBullet API token.": "token-format",
         "Minted agent API token cannot reach the Knowledge space.": "token-access",
+        "Expected exactly one Reports space.": "reports-space-count",
+        "Unrecognized Reports space identifier.": "reports-space-identifier",
+        "Existing Reports space has unexpected configuration.": "reports-space-configuration",
+        "Existing Reports agent role is not restricted as expected.": "reports-member-role",
+        "Reports space configuration failed verification.": "reports-verification",
         "Unsupported semantic search model configuration.": "search-model-unsupported",
         "Semantic search model configuration was not confirmed.": "search-model-unconfirmed",
     }
@@ -267,7 +329,7 @@ def run() -> None:
             _phase("create-admin-and-space")
             response = http.post("/.setup/api/complete", json={
                 "adminUsername": ADMIN, "adminPassword": adminpass,
-                "space": {"name": SPACE, "prefix": "/",
+                "space": {"name": SPACE, "prefix": SPACE_PREFIX,
                           "folder": SPACE_FOLDER,
                           "revisions": "unmanaged", "starter": {"type": "none"}},
             })
@@ -276,6 +338,8 @@ def run() -> None:
         _login(http, adminpass)
         _phase("configure-agent-permissions")
         _configure_agent(http, agentpass)
+        _phase("configure-reports-space")
+        _configure_reports(http)
         _phase("issue-and-verify-api-token")
         _configure_token(http, directory / "token")
         _phase("configure-semantic-search")

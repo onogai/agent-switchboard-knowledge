@@ -22,6 +22,8 @@ class FakeV3:
         self.mint_count = 0
         self.search_model = None
         self.model_changes = 0
+        self.reports_creates = 0
+        self.space_patches = 0
 
     def handle(self, req):
         path, method = req.url.path, req.method
@@ -40,7 +42,7 @@ class FakeV3:
             self.users["admin"] = {"admin": True, "disabled": False, "tokens": {}}
             self.spaces["00000000-0000-4000-8000-000000000001"] = {
                 "name": "Knowledge", "folder": "/knowledge",
-                "binding": {"prefix": ""}, "access": "none", "members": {},
+                "binding": {"prefix": payload["space"]["prefix"]}, "access": "none", "members": {},
             }
             return ok({"status": "ok"})
         if path == "/.dashboard/api/login" and method == "POST":
@@ -51,9 +53,12 @@ class FakeV3:
             if not self.setup:
                 return ok({}, 307, headers={"location": "/.setup/"})
             return ok({"admin": True}, 200) if "session=safe" in req.headers.get("cookie", "") else ok({}, 401)
-        if path == "/.help":
+        if path in ("/.help", "/knowledge/.help", "/reports/.help"):
             token = req.headers.get("authorization", "").removeprefix("Bearer ")
-            if self.tokens.get(token) == "switchboard-agent":
+            space_name = "Reports" if path.startswith("/reports/") else "Knowledge"
+            allowed = any(cfg["name"] == space_name and cfg["binding"]["prefix"].rstrip("/") + "/.help" == path and "switchboard-agent" in cfg["members"]
+                          for cfg in self.spaces.values())
+            if self.tokens.get(token) == "switchboard-agent" and allowed:
                 return ok({"version": 1, "outline": {"folders": []}})
             return ok({}, 401)
         prefix = "/.dashboard/api/admin/"
@@ -74,10 +79,20 @@ class FakeV3:
             return ok({"status": "ok"})
         if endpoint == "spaces" and method == "GET":
             return ok(self.spaces)
+        if endpoint == "spaces" and method == "POST":
+            ident = "00000000-0000-4000-8000-000000000002"
+            assert ident not in self.spaces
+            if any(cfg["binding"]["prefix"] in ("", "/") for cfg in self.spaces.values()):
+                return ok({"errors": [{"field": "binding", "message": "root conflicts with prefix"}]}, 400)
+            self.spaces[ident] = {key: value for key, value in payload.items()
+                                  if key not in {"starter", "seedIndex"}}
+            self.reports_creates += 1
+            return ok({"id": ident})
         if endpoint.startswith("spaces/"):
             ident = endpoint.split("/")[1]
             if method == "PATCH":
-                self.spaces[ident]["members"] = payload["members"]
+                self.spaces[ident].update(payload)
+                self.space_patches += 1
                 return ok({"status": "ok"})
             if method == "GET":
                 return ok(self.spaces[ident])
@@ -136,6 +151,7 @@ class SilverBullet3BootstrapTests(unittest.TestCase):
         self.assertEqual(1, self.backend.model_changes)
         space = next(iter(self.backend.spaces.values()))
         self.assertEqual("none", space["access"])
+        self.assertEqual({"prefix": "/knowledge"}, space["binding"])
         self.assertEqual({"role": "write", "runtimeApi": False},
                          space["members"]["switchboard-agent"])
         self.assertEqual("sbt_" + "a"*64, (self.secrets / "token").read_text().strip())
@@ -143,6 +159,42 @@ class SilverBullet3BootstrapTests(unittest.TestCase):
         self.assertEqual(1, self.backend.setup_count)
         self.assertEqual(1, self.backend.mint_count)
         self.assertEqual(1, self.backend.model_changes)
+
+    def test_upgrade_provisions_reports_once_and_reuses_token(self):
+        bootstrap.run()
+        root_id, reports_id = list(self.backend.spaces)
+        original_root = json.loads(json.dumps(self.backend.spaces[root_id]))
+        original_token = (self.secrets / "token").read_text()
+        del self.backend.spaces[reports_id]  # simulate previous single-space release
+        self.backend.spaces[root_id]["binding"] = {"prefix": ""}
+        self.backend.reports_creates = 0
+        before = self.backend.space_patches
+        bootstrap.run()
+        reports = self.backend.spaces[reports_id]
+        self.assertEqual("/reports", reports["folder"])
+        self.assertEqual({"prefix": "/reports"}, reports["binding"])
+        self.assertIs(reports["semanticSearch"], False)
+        self.assertEqual({"role": "write", "runtimeApi": False},
+                         reports["members"]["switchboard-agent"])
+        self.assertEqual(original_root, self.backend.spaces[root_id])
+        self.assertEqual(original_token, (self.secrets / "token").read_text())
+        bootstrap.run()
+        self.assertEqual(1, self.backend.reports_creates)
+        self.assertEqual(before + 1, self.backend.space_patches)
+        self.assertEqual(1, self.backend.mint_count)
+        self.assertEqual(1, self.backend.model_changes)
+
+    def test_existing_reports_repairs_only_needed_settings(self):
+        bootstrap.run()
+        reports = next(cfg for cfg in self.backend.spaces.values() if cfg["name"] == "Reports")
+        reports["semanticSearch"] = True
+        reports["members"] = {"other": {"role": "read"}}
+        before = self.backend.space_patches
+        bootstrap.run()
+        bootstrap.run()
+        self.assertEqual(before + 1, self.backend.space_patches)
+        self.assertIs(reports["semanticSearch"], False)
+        self.assertIn("other", reports["members"])
 
     def test_can_disable_semantic_search_without_a_migration(self):
         bootstrap.run()

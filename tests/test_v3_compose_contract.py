@@ -44,8 +44,8 @@ class V3ComposeContractTests(unittest.TestCase):
     def test_content_and_server_metadata_are_isolated(self):
         app = self.services["silverbulletapp"]
         destinations = {mount["target"] for mount in app["volumes"]}
-        self.assertEqual({"/data", "/knowledge"}, destinations)
-        self.assertEqual({"server", "space"}, set(self.manifest["state_dirs"].split(",")))
+        self.assertEqual({"/data", "/knowledge", "/reports"}, destinations)
+        self.assertEqual({"server", "space", "reports"}, set(self.manifest["state_dirs"].split(",")))
         self.assertEqual({"token", "password", "agentpass", "mcptoken"},
                          set(self.manifest["secret_files"].split(",")))
 

@@ -19,7 +19,7 @@ from fastmcp import Client
 
 
 EXPECTED = {
-    "notes_search", "notes_read_page", "notes_capture",
+    "notes_search", "notes_read_page", "notes_capture", "notes_query_pages",
     "notes_create_wiki_page", "notes_update_page",
     "notes_list_agent_feedback", "notes_resolve_agent_feedback",
     "notes_overview", "notes_search_status", "notes_search_ranked",

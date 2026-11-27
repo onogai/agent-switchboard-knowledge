@@ -29,7 +29,7 @@ from scripts.check_silverbullet_http import accept, main as acceptance_cli
 
 
 EXPECTED = {
-    "notes_search", "notes_read_page", "notes_capture",
+    "notes_search", "notes_read_page", "notes_capture", "notes_query_pages",
     "notes_create_wiki_page", "notes_update_page",
     "notes_list_agent_feedback", "notes_resolve_agent_feedback",
     "notes_overview", "notes_search_status", "notes_search_ranked",
@@ -48,9 +48,9 @@ def fake_api(space: Path):
 
         def _target(self):
             url = unquote(urlsplit(self.path).path)
-            if not url.startswith("/.fs/"):
+            if not url.startswith("/knowledge/.fs/"):
                 return None
-            relative = url.removeprefix("/.fs/")
+            relative = url.removeprefix("/knowledge/.fs/")
             parts = relative.split("/")
             if (not all(parts) or
                 any(part in {".", ".."} for part in parts) or

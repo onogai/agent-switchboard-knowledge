@@ -15,8 +15,8 @@ MODES = {"words", "phrase", "natural"}
 
 
 def _api(method: str, endpoint: str, *, payload: dict | None = None,
-         await_index: bool = False) -> dict:
-    client = KnowledgeClient.from_environment()
+         await_index: bool = False, space: str = "knowledge") -> dict:
+    client = KnowledgeClient.from_environment(space)
     headers = {
         "Authorization": f"Bearer {client._token()}",
         "Accept": "application/json",
@@ -61,21 +61,21 @@ def _api(method: str, endpoint: str, *, payload: dict | None = None,
     return parsed
 
 
-def overview() -> dict:
+def overview(space: str = "knowledge") -> dict:
     """Bounded discovery of top-level pages, folders, tags and available skills."""
-    result = _api("GET", "/.help")
+    result = _api("GET", "/.help", space=space)
     if result.get("version") != 1 or not isinstance(result.get("outline"), dict):
         raise KnowledgeError("Unexpected SilverBullet 3.0 help schema.")
     return result
 
 
-def search_status() -> dict:
+def search_status(space: str = "knowledge") -> dict:
     """Report active search backend and whether semantic search is enabled and ready."""
-    return _api("GET", "/.search/status")
+    return _api("GET", "/.search/status", space=space)
 
 
 def find(query: str, mode: str = "words", limit: int = 10,
-         await_index: bool = False) -> dict:
+         await_index: bool = False, space: str = "knowledge") -> dict:
     """Server-side ranked text/semantic search. Never silently claim semantic readiness."""
     if not isinstance(query, str) or not 2 <= len(query.strip()) <= 200:
         raise KnowledgeError("Search query must be 2–200 characters.")
@@ -85,7 +85,7 @@ def find(query: str, mode: str = "words", limit: int = 10,
         raise KnowledgeError("Limit must be 1–30.")
     if not isinstance(await_index, bool):
         raise KnowledgeError("await_index must be a boolean.")
-    result = _api("POST", "/.search/query", await_index=await_index,
+    result = _api("POST", "/.search/query", await_index=await_index, space=space,
                   payload={"query": query.strip(), "mode": mode, "scope": "pages",
                            "limit": limit})
     if not isinstance(result.get("items"), list):
@@ -93,12 +93,12 @@ def find(query: str, mode: str = "words", limit: int = 10,
     return result
 
 
-def related(page: str, limit: int = 5) -> dict:
+def related(page: str, limit: int = 5, space: str = "knowledge") -> dict:
     """Use the semantic index to find pages related to the named page."""
     if not isinstance(limit, int) or not 1 <= limit <= 15:
         raise KnowledgeError("Limit must be 1–15.")
     page = page_path(page).removesuffix(".md")
-    result = _api("POST", "/.search/related",
+    result = _api("POST", "/.search/related", space=space,
                   payload={"page": page, "limit": limit, "scope": "pages"})
     if not isinstance(result.get("items"), list):
         raise KnowledgeError("SilverBullet related search returned an unexpected result.")

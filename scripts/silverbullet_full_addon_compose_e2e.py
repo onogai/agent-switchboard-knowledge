@@ -1,7 +1,7 @@
 """Disposable full SilverBullet add-on Compose acceptance on an ISOLATED Docker host.
 
 Tests the actual schema-v2 packaging, three services, private network,
-automatic bootstrap and sixteen real HTTP MCP tools. NEVER points at production
+automatic bootstrap and seventeen real HTTP MCP tools. NEVER points at production
 data, production networks, production Core/Registry or host ports.
 
 Operator-only. Can coexist with other Docker projects: creates and removes
@@ -179,7 +179,7 @@ async def main():
     async with Client("http://127.0.0.1:8773/mcp", timeout=5, auth=token) as client:
         tools = await client.list_tools()
         assert {t.name for t in tools} == {
-            "notes_search", "notes_read_page", "notes_capture",
+            "notes_search", "notes_read_page", "notes_capture", "notes_query_pages",
             "notes_create_wiki_page", "notes_update_page",
             "notes_list_agent_feedback", "notes_resolve_agent_feedback",
             "notes_overview", "notes_search_status", "notes_search_ranked",
@@ -226,6 +226,33 @@ async def main():
                 break
             await asyncio.sleep(1)
         assert match is not None, "Indexed search missed disposable knowledge"
+        page = "News/Acceptance"
+        body = "---\\ndate: 2026-11-27\\n---\\n# Report space unique sentinel\\n"
+        args = {"space": "reports", "page": page, "content": body, "idempotent": True}
+        assert decode(await client.call_tool("notes_create_wiki_page", args))["created"]
+        assert not decode(await client.call_tool("notes_create_wiki_page", args))["created"]
+        docs = decode(await client.call_tool("notes_query_pages", {
+            "space": "reports", "prefix": "News", "date_from": "2026-11-27",
+            "date_to": "2026-11-27", "include_content": True,
+        }))
+        assert docs["total"] == 1 and docs["items"][0]["page"] == page
+        root = decode(await client.call_tool("notes_search", {"query": "Report space unique sentinel"}))
+        assert root["total"] == 0
+        report = decode(await client.call_tool("notes_search", {"space": "reports", "query": "Report space unique sentinel"}))
+        assert report["total"] == 1
+        for _ in range(15):
+            result = decode(await client.call_tool("notes_search_ranked", {
+                "space": "reports", "query": "Report space unique sentinel", "mode": "phrase",
+            }))
+            if any(row["page"] == page for row in result["items"]):
+                break
+            await asyncio.sleep(1)
+        else:
+            raise AssertionError("Reports full-text index missed report")
+        root = decode(await client.call_tool("notes_search_ranked", {
+            "query": "Report space unique sentinel", "mode": "phrase",
+        }))
+        assert not any(row["page"] == page for row in root["items"])
 asyncio.run(main())
 """
     docker("exec", "-i", container, "python", "-", input_text=code)
@@ -262,10 +289,10 @@ from pathlib import Path
 base = os.environ["KNOWLEDGE_BASE_URL"]
 token = Path(os.environ["KNOWLEDGE_TOKEN_FILE"]).read_text().strip()
 with httpx.Client(timeout=8, trust_env=False) as client:
-    anonymous = client.get(base + "/.fs/Wiki/E2E-Sentinel.md",
+    anonymous = client.get(base + "/knowledge/.fs/Wiki/E2E-Sentinel.md",
                            headers={"X-Sync-Mode": "true"})
     assert anonymous.status_code in (401, 403), anonymous.status_code
-    authorized = client.get(base + "/.fs/Wiki/E2E-Sentinel.md",
+    authorized = client.get(base + "/knowledge/.fs/Wiki/E2E-Sentinel.md",
                             headers={"Authorization": "Bearer " + token,
                                      "X-Sync-Mode": "true"})
     assert authorized.status_code == 200, authorized.status_code
@@ -389,6 +416,8 @@ def run() -> dict:
         server.mkdir(mode=0o700)
         space = state / "space"
         space.mkdir(mode=0o700)
+        reports = state / "reports"
+        reports.mkdir(mode=0o700)
         (space / "Wiki").mkdir(mode=0o700)
         (space / "Wiki" / "E2E-Sentinel.md").write_text(
             "# Disposable add-on acceptance\n", encoding="utf-8"
@@ -475,7 +504,7 @@ def run() -> dict:
             if not mcp:
                 raise AcceptanceError("MCP adapter was not created")
             _inspect(mcp, network, state, readonly_targets=frozenset({
-                "/knowledge", "/run/secrets/silverbullet-token",
+                "/knowledge", "/reports", "/run/secrets/silverbullet-token",
                 "/run/secrets/silverbullet-mcp-token",
             }))
             if not (server / "users.json").is_file() or not (server / "spaces.json").is_file():
@@ -490,6 +519,14 @@ def run() -> dict:
             entries = spaces.get("spaces", spaces)
             if not any(v.get("name") == "Knowledge" for v in entries.values() if isinstance(v, dict)):
                 raise AcceptanceError("Knowledge space was not initialized")
+            knowledge_entries = [v for v in entries.values() if isinstance(v, dict) and v.get("name") == "Knowledge"]
+            if len(knowledge_entries) != 1 or knowledge_entries[0].get("binding") != {"prefix": "/knowledge"}:
+                raise AcceptanceError("Knowledge binding was not initialized")
+            report_entries = [v for v in entries.values() if isinstance(v, dict) and v.get("name") == "Reports"]
+            if len(report_entries) != 1 or report_entries[0].get("semanticSearch") is not False:
+                raise AcceptanceError("Reports space was not initialized with semantic search disabled")
+            before_token = (secret_dir / "token").read_bytes()
+            before_entries = entries
             phase = "wait for MCP initialize/tools/list"
             for attempt in range(50):
                 try:
@@ -506,7 +543,7 @@ def run() -> dict:
             phase = "verify SilverBullet 3 overview and indexed full-text search"
             print("E2E: " + phase, flush=True)
             _v3_search_probe(mcp)
-            phase = "exercise sixteen MCP tools, writes, feedback and ETags"
+            phase = "exercise seventeen MCP tools, writes, feedback and ETags"
             result = _accept(mcp)
             phase = "verify persistent disposable Markdown writes"
             files = list(space.rglob("*.md"))
@@ -528,6 +565,11 @@ def run() -> dict:
                 ) from original
             phase = "verify MCP remains available after installer-style startup"
             _probe(mcp)
+            after = json.loads((server / "spaces.json").read_text())
+            if after.get("spaces", after) != before_entries or (secret_dir / "token").read_bytes() != before_token:
+                raise AcceptanceError("Repeated bootstrap changed existing space configuration or token")
+            if not (reports / "News" / "Acceptance.md").is_file():
+                raise AcceptanceError("Reports document did not persist across bootstrap")
             return {
                 "official_silverbullet": "3.0-edge-slim (digest pinned)",
                 "compose_service_count": 3,
@@ -535,7 +577,7 @@ def run() -> dict:
                 "installer_style_compose_wait_verified": True,
                 "private_internal_network": True,
                 "host_ports_published": False,
-                "mcp_tools_tested": 16,
+                "mcp_tools_tested": 17,
                 "mcp_bearer_required": True,
                 "mcp_anonymous_and_invalid_rejected": True,
                 "read_write_etag_feedback_verified": True,
