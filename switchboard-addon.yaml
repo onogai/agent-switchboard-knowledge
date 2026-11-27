@@ -5,7 +5,7 @@ icon: assets/icon.svg
 compose: compose.addon.yaml
 service: silverbulletadapter
 services: silverbulletapp,silverbulletbootstrap,silverbulletadapter
-state_dirs: server,space
+state_dirs: server,space,reports
 secret_files: token,password,agentpass,mcptoken
 mcp_auth: bearer
 mcp_port: 8773

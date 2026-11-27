@@ -17,6 +17,9 @@ services:
       - type: bind
         source: "${SWITCHBOARD_ADDON_STATE:?}/space"
         target: /knowledge
+      - type: bind
+        source: "${SWITCHBOARD_ADDON_STATE:?}/reports"
+        target: /reports
     networks:
       addons:
         aliases: ["addon-${SWITCHBOARD_ADDON_INSTANCE}-silverbulletapp"]
@@ -62,7 +65,7 @@ services:
       SILVERBULLET_MCP_BIND_HOST: "0.0.0.0"
       SILVERBULLET_MCP_TOKEN_FILE: /run/secrets/silverbullet-mcp-token
       KNOWLEDGE_SPACE_DIR: /knowledge
-      KNOWLEDGE_SEARCH_EXCLUDE_PREFIXES: "${KNOWLEDGE_SEARCH_EXCLUDE_PREFIXES-Wiki/Reports}"
+      REPORTS_SPACE_DIR: /reports
       SILVERBULLET_MCP_WRITE_ENABLED: "true"
       KNOWLEDGE_TOKEN_FILE: /run/secrets/silverbullet-token
       KNOWLEDGE_BASE_URL: "http://addon-${SWITCHBOARD_ADDON_INSTANCE}-silverbulletapp:3000"
@@ -70,6 +73,10 @@ services:
       - type: bind
         source: "${SWITCHBOARD_ADDON_STATE:?}/space"
         target: /knowledge
+        read_only: true
+      - type: bind
+        source: "${SWITCHBOARD_ADDON_STATE:?}/reports"
+        target: /reports
         read_only: true
       - type: bind
         source: "${SWITCHBOARD_ADDON_STATE:?}/secrets/token"
