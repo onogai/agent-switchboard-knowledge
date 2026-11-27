@@ -11,6 +11,7 @@ import hmac
 import os
 from pathlib import Path
 import stat
+from typing import Literal
 
 from fastmcp import FastMCP
 from fastmcp.server.auth import AccessToken, TokenVerifier
@@ -67,59 +68,59 @@ def _authentication() -> TokenVerifier | None:
 mcp = FastMCP("Switchboard SilverBullet", auth=_authentication())
 
 
-async def notes_search(query: str, limit: int = 10, include_excluded: bool = False) -> dict:
-    """Use to locate notes by keywords; returns page paths and excerpts, not full Markdown. Query must be 2–200 characters, limit 1–30. Read a matching page using notes_read_page. Report folders are excluded unless include_excluded=True."""
-    client = KnowledgeClient.from_environment()
-    return await asyncio.to_thread(search_pages, client.root, query, limit, include_excluded)
+async def notes_search(query: str, limit: int = 10, space: Literal["knowledge", "reports"] = "knowledge") -> dict:
+    """Use to locate notes by keywords; returns page paths and excerpts, not full Markdown. Query must be 2–200 characters, limit 1–30. Read a matching page using notes_read_page. Select reports explicitly to search operational documents."""
+    client = KnowledgeClient.from_environment(space)
+    return await asyncio.to_thread(search_pages, client.root, query, limit)
 
 
-async def notes_list_pages(prefix: str = "", limit: int = 50, offset: int = 0) -> dict:
+async def notes_list_pages(prefix: str = "", limit: int = 50, offset: int = 0, space: Literal["knowledge", "reports"] = "knowledge") -> dict:
     """Browse actual Markdown page paths, optionally limited to a folder subtree such as Wiki/Automobiles. Returns a bounded page list and pagination details."""
-    client = KnowledgeClient.from_environment()
+    client = KnowledgeClient.from_environment(space)
     return await asyncio.to_thread(list_pages, client.root, prefix, limit, offset)
 
 
 async def notes_query_pages(prefix: str, date_from: str, date_to: str,
                             date_field: str = "date", metadata_equals: dict[str, str] | None = None,
                             fields: list[str] | None = None, include_content: bool = False,
-                            limit: int = 30, offset: int = 0, max_bytes: int = 60000) -> dict:
-    """Retrieve dated Markdown documents in a folder subtree using YAML frontmatter, not file modification time or the search index. Inclusive YYYY-MM-DD dates; date_field defaults to date. metadata_equals matches scalar values or membership in scalar lists (e.g. tags). fields selects metadata keys (None=all, []=none); include_content includes Markdown bodies. Newest date first, then page path. Follow next_offset when truncated; max_bytes bounds the JSON response. Includes search-excluded folders."""
-    client = KnowledgeClient.from_environment()
+                            limit: int = 30, offset: int = 0, max_bytes: int = 60000, space: Literal["knowledge", "reports"] = "knowledge") -> dict:
+    """Retrieve dated Markdown documents in a folder subtree using YAML frontmatter, not file modification time or the search index. Inclusive YYYY-MM-DD dates; date_field defaults to date. metadata_equals matches scalar values or membership in scalar lists (e.g. tags). fields selects metadata keys (None=all, []=none); include_content includes Markdown bodies. Newest date first, then page path. Follow next_offset when truncated; max_bytes bounds the JSON response. Use space=reports for operational documents."""
+    client = KnowledgeClient.from_environment(space)
     return await asyncio.to_thread(query_pages, client.root, prefix, date_from, date_to,
                                    date_field, metadata_equals, fields, include_content,
                                    limit, offset, max_bytes)
 
 
-async def notes_backlinks(page: str, limit: int = 30) -> dict:
+async def notes_backlinks(page: str, limit: int = 30, space: Literal["knowledge", "reports"] = "knowledge") -> dict:
     """Find explicit SilverBullet wiki links pointing at a specific page. Returns source pages, lines and excerpts; this does not infer semantic relationships."""
-    client = KnowledgeClient.from_environment()
+    client = KnowledgeClient.from_environment(space)
     return await asyncio.to_thread(backlinks, client.root, page, limit)
 
 
-async def notes_overview() -> dict:
+async def notes_overview(space: Literal["knowledge", "reports"] = "knowledge") -> dict:
     """Discover available folders, top-level pages, skills and tags via SilverBullet 3.0 /.help. Prefer this before searching when unfamiliar with the knowledge space."""
-    return await asyncio.to_thread(v3_overview)
+    return await asyncio.to_thread(v3_overview, space)
 
 
-async def notes_search_status() -> dict:
+async def notes_search_status(space: Literal["knowledge", "reports"] = "knowledge") -> dict:
     """Check which SilverBullet 3.0 search modes are ready. Semantic mode is optional and can be disabled or still indexing."""
-    return await asyncio.to_thread(v3_search_status)
+    return await asyncio.to_thread(v3_search_status, space)
 
 
 async def notes_search_ranked(query: str, mode: str = "words", limit: int = 10,
-                              await_index: bool = False, include_excluded: bool = False) -> dict:
-    """Ranked server-index search. 'words' for exact topics, 'phrase' for a quotation, 'natural' for semantic intent (only when enabled). Uses the available index by default; recent writes may be missing. Set await_index=True to request bounded catch-up, not guaranteed embedding freshness. Inspect index_status (if returned), partial and notice; read source pages. Configured report folders are excluded unless include_excluded=True."""
-    return await asyncio.to_thread(v3_find, query, mode, limit, await_index, include_excluded)
+                              await_index: bool = False, space: Literal["knowledge", "reports"] = "knowledge") -> dict:
+    """Ranked server-index search. 'words' for exact topics, 'phrase' for a quotation, 'natural' for semantic intent (only when enabled). Uses the available index by default; recent writes may be missing. Set await_index=True to request bounded catch-up, not guaranteed embedding freshness. Inspect index_status (if returned), partial and notice; read source pages. Select reports explicitly to search operational documents."""
+    return await asyncio.to_thread(v3_find, query, mode, limit, await_index, space)
 
 
-async def notes_related_pages(page: str, limit: int = 5, include_excluded: bool = False) -> dict:
-    """Find pages semantically related to a known page (requires enabled, ready semantic search). Read matching pages before using them as facts. Configured report folders are excluded unless include_excluded=True."""
-    return await asyncio.to_thread(v3_related, page, limit, include_excluded)
+async def notes_related_pages(page: str, limit: int = 5, space: Literal["knowledge", "reports"] = "knowledge") -> dict:
+    """Find pages semantically related to a known page (requires enabled, ready semantic search). Read matching pages before using them as facts. Select reports explicitly to search operational documents."""
+    return await asyncio.to_thread(v3_related, page, limit, space)
 
 
-async def notes_read_page(page: str) -> dict:
+async def notes_read_page(page: str, space: Literal["knowledge", "reports"] = "knowledge") -> dict:
     """Read the complete Markdown of a SilverBullet page and its current ETag. Use after notes_search or before any update or feedback resolution. Pass page path without optional .md."""
-    return await asyncio.to_thread(KnowledgeClient.from_environment().read_page, page)
+    return await asyncio.to_thread(KnowledgeClient.from_environment(space).read_page, page)
 
 
 def _require_write_mode() -> None:
@@ -130,56 +131,56 @@ def _require_write_mode() -> None:
         raise KnowledgeError("Knowledge writes are disabled for this MCP deployment.")
 
 
-async def notes_capture(title: str, content: str) -> dict:
+async def notes_capture(title: str, content: str, space: Literal["knowledge", "reports"] = "knowledge") -> dict:
     """Capture a new note or conversation result as a uniquely named page under Inbox/. Supply a title and Markdown content; never overwrites another note. For a named Wiki/ page use notes_create_wiki_page."""
     _require_write_mode()
-    return await asyncio.to_thread(KnowledgeClient.from_environment().create_note, title, content)
+    return await asyncio.to_thread(KnowledgeClient.from_environment(space).create_note, title, content)
 
 
-async def notes_create_wiki_page(page: str, content: str, idempotent: bool = False) -> dict:
-    """Create a named Wiki/ page with complete Markdown, refusing to overwrite existing pages. Use notes_capture to store unstructured quick notes in Inbox/. For recurring documents use a deterministic path and idempotent=True: an identical existing document succeeds without rewriting; different content conflicts."""
+async def notes_create_wiki_page(page: str, content: str, idempotent: bool = False, space: Literal["knowledge", "reports"] = "knowledge") -> dict:
+    """Create a named Markdown page (Wiki/ in knowledge; arbitrary document folders in reports), refusing to overwrite existing pages. Use notes_capture to store unstructured quick notes in Inbox/. For recurring documents use a deterministic path and idempotent=True: an identical existing document succeeds without rewriting; different content conflicts."""
     _require_write_mode()
-    return await asyncio.to_thread(KnowledgeClient.from_environment().create_page, page, content, idempotent)
+    return await asyncio.to_thread(KnowledgeClient.from_environment(space).create_page, page, content, idempotent)
 
 
-async def notes_update_page(page: str, content: str, etag: str) -> dict:
-    """Replace the ENTIRE content of an existing Wiki/ or Inbox/ page using the ETag from notes_read_page. Fails on concurrent changes; re-read and reconcile. This does not append or patch."""
+async def notes_update_page(page: str, content: str, etag: str, space: Literal["knowledge", "reports"] = "knowledge") -> dict:
+    """Replace the ENTIRE content of an existing writable page using the ETag from notes_read_page. Fails on concurrent changes; re-read and reconcile. This does not append or patch."""
     _require_write_mode()
-    return await asyncio.to_thread(KnowledgeClient.from_environment().update_page,
+    return await asyncio.to_thread(KnowledgeClient.from_environment(space).update_page,
                                    page, content, etag)
 
 
-async def notes_edit_page(page: str, old_text: str, new_text: str, etag: str) -> dict:
+async def notes_edit_page(page: str, old_text: str, new_text: str, etag: str, space: Literal["knowledge", "reports"] = "knowledge") -> dict:
     """Replace exactly one occurrence of old_text in an existing Wiki/ or Inbox/ page. Requires the current ETag; refuses ambiguous matches and concurrent edits."""
     _require_write_mode()
-    return await asyncio.to_thread(KnowledgeClient.from_environment().edit_page,
+    return await asyncio.to_thread(KnowledgeClient.from_environment(space).edit_page,
                                    page, old_text, new_text, etag)
 
 
-async def notes_move_page(source: str, destination: str, etag: str) -> dict:
-    """Move an existing Inbox/ or Wiki/ Markdown page to a free path using conditional writes. Requires a current ETag. Backlinks are not rewritten; conflicts abort safely."""
+async def notes_move_page(source: str, destination: str, etag: str, space: Literal["knowledge", "reports"] = "knowledge") -> dict:
+    """Move an existing writable Markdown page within the selected space to a free path using conditional writes. Requires a current ETag. Backlinks are not rewritten; conflicts abort safely."""
     _require_write_mode()
-    return await asyncio.to_thread(KnowledgeClient.from_environment().move_page,
+    return await asyncio.to_thread(KnowledgeClient.from_environment(space).move_page,
                                    source, destination, etag)
 
 
-async def notes_delete_page(page: str, etag: str, confirm: bool = False) -> dict:
-    """Permanently delete one Inbox/ or Wiki/ Markdown page. Requires a current ETag and explicit confirm=true; rejects stale revisions and protected paths."""
+async def notes_delete_page(page: str, etag: str, confirm: bool = False, space: Literal["knowledge", "reports"] = "knowledge") -> dict:
+    """Permanently delete one writable Markdown page in the selected space. Requires a current ETag and explicit confirm=true; rejects stale revisions and protected paths."""
     _require_write_mode()
-    return await asyncio.to_thread(KnowledgeClient.from_environment().delete_page,
+    return await asyncio.to_thread(KnowledgeClient.from_environment(space).delete_page,
                                    page, etag, confirm)
 
 
-async def notes_list_agent_feedback(limit: int = 20) -> dict:
+async def notes_list_agent_feedback(limit: int = 20, space: Literal["knowledge", "reports"] = "knowledge") -> dict:
     """Find pending @agent HTML comments in Markdown notes; return feedback ID, page, text and preceding context. Read the current page before calling notes_resolve_agent_feedback."""
-    client = KnowledgeClient.from_environment()
+    client = KnowledgeClient.from_environment(space)
     return await asyncio.to_thread(list_feedback, client.root, limit)
 
 
-async def notes_resolve_agent_feedback(page: str, feedback_id: str, etag: str) -> dict:
+async def notes_resolve_agent_feedback(page: str, feedback_id: str, etag: str, space: Literal["knowledge", "reports"] = "knowledge") -> dict:
     """Remove exactly one completed @agent feedback comment. Requires page, feedback ID from notes_list_agent_feedback, and current ETag from notes_read_page. Fails if page changed or ID ambiguous."""
     _require_write_mode()
-    client = KnowledgeClient.from_environment()
+    client = KnowledgeClient.from_environment(space)
     return await asyncio.to_thread(client.resolve_feedback, page, feedback_id, etag)
 
 

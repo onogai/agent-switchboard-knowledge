@@ -8,16 +8,15 @@ from __future__ import annotations
 import httpx
 import time
 
-from .knowledge import (KnowledgeClient, KnowledgeError, page_path,
-                        search_exclude_prefixes, excluded_page_names, is_excluded)
+from .knowledge import KnowledgeClient, KnowledgeError, page_path
 
 MAX_JSON_BYTES = 200_000
 MODES = {"words", "phrase", "natural"}
 
 
 def _api(method: str, endpoint: str, *, payload: dict | None = None,
-         await_index: bool = False) -> dict:
-    client = KnowledgeClient.from_environment()
+         await_index: bool = False, space: str = "knowledge") -> dict:
+    client = KnowledgeClient.from_environment(space)
     headers = {
         "Authorization": f"Bearer {client._token()}",
         "Accept": "application/json",
@@ -62,42 +61,21 @@ def _api(method: str, endpoint: str, *, payload: dict | None = None,
     return parsed
 
 
-def overview() -> dict:
+def overview(space: str = "knowledge") -> dict:
     """Bounded discovery of top-level pages, folders, tags and available skills."""
-    result = _api("GET", "/.help")
+    result = _api("GET", "/.help", space=space)
     if result.get("version") != 1 or not isinstance(result.get("outline"), dict):
         raise KnowledgeError("Unexpected SilverBullet 3.0 help schema.")
     return result
 
 
-def search_status() -> dict:
+def search_status(space: str = "knowledge") -> dict:
     """Report active search backend and whether semantic search is enabled and ready."""
-    return _api("GET", "/.search/status")
-
-
-def _search_payload(payload: dict, include_excluded: bool) -> tuple[dict, tuple[str, ...]]:
-    prefixes = () if include_excluded else search_exclude_prefixes()
-    if prefixes:
-        names = excluded_page_names(KnowledgeClient.from_environment().root, prefixes)
-        if names:
-            payload["exclude"] = names
-    return payload, prefixes
-
-
-def _search_result(result: dict, prefixes: tuple[str, ...]) -> dict:
-    if not isinstance(result.get("items"), list):
-        raise KnowledgeError("SilverBullet search returned an unexpected result.")
-    # The local directory snapshot may race an index update.
-    items = [item for item in result["items"] if not is_excluded(item["page"], prefixes)]
-    if len(items) != len(result["items"]):
-        result = {**result, "items": items, "partial": True,
-                  "notice": ((result.get("notice") or "") +
-                             " Excluded pages removed from a stale search snapshot.").strip()}
-    return result
+    return _api("GET", "/.search/status", space=space)
 
 
 def find(query: str, mode: str = "words", limit: int = 10,
-         await_index: bool = False, include_excluded: bool = False) -> dict:
+         await_index: bool = False, space: str = "knowledge") -> dict:
     """Server-side ranked text/semantic search. Never silently claim semantic readiness."""
     if not isinstance(query, str) or not 2 <= len(query.strip()) <= 200:
         raise KnowledgeError("Search query must be 2–200 characters.")
@@ -107,18 +85,21 @@ def find(query: str, mode: str = "words", limit: int = 10,
         raise KnowledgeError("Limit must be 1–30.")
     if not isinstance(await_index, bool):
         raise KnowledgeError("await_index must be a boolean.")
-    payload, prefixes = _search_payload(
-        {"query": query.strip(), "mode": mode, "scope": "pages", "limit": limit},
-        include_excluded)
-    return _search_result(_api("POST", "/.search/query", await_index=await_index,
-                               payload=payload), prefixes)
+    result = _api("POST", "/.search/query", await_index=await_index, space=space,
+                  payload={"query": query.strip(), "mode": mode, "scope": "pages",
+                           "limit": limit})
+    if not isinstance(result.get("items"), list):
+        raise KnowledgeError("SilverBullet search returned an unexpected result.")
+    return result
 
 
-def related(page: str, limit: int = 5, include_excluded: bool = False) -> dict:
+def related(page: str, limit: int = 5, space: str = "knowledge") -> dict:
     """Use the semantic index to find pages related to the named page."""
     if not isinstance(limit, int) or not 1 <= limit <= 15:
         raise KnowledgeError("Limit must be 1–15.")
     page = page_path(page).removesuffix(".md")
-    payload, prefixes = _search_payload(
-        {"page": page, "limit": limit, "scope": "pages"}, include_excluded)
-    return _search_result(_api("POST", "/.search/related", payload=payload), prefixes)
+    result = _api("POST", "/.search/related", space=space,
+                  payload={"page": page, "limit": limit, "scope": "pages"})
+    if not isinstance(result.get("items"), list):
+        raise KnowledgeError("SilverBullet related search returned an unexpected result.")
+    return result

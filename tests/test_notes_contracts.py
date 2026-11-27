@@ -29,10 +29,10 @@ class NotesContractTests(unittest.TestCase):
     def test_ranked_search_await_index_defaults_to_false(self):
         with patch("silverbullet_mcp.server.v3_find", return_value={"items": []}) as find:
             asyncio.run(notes_search_ranked("family car", "natural", 8))
-            find.assert_called_once_with("family car", "natural", 8, False, False)
+            find.assert_called_once_with("family car", "natural", 8, False, "knowledge")
             find.reset_mock()
             asyncio.run(notes_search_ranked("family car", "natural", 8, await_index=True))
-            find.assert_called_once_with("family car", "natural", 8, True, False)
+            find.assert_called_once_with("family car", "natural", 8, True, "knowledge")
 
     def test_offline_search_and_agent_feedback_do_not_require_core(self):
         with tempfile.TemporaryDirectory() as root:

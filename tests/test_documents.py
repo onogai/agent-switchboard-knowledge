@@ -14,9 +14,6 @@ class DocumentTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
-        env = patch.dict("os.environ", {"KNOWLEDGE_SEARCH_EXCLUDE_PREFIXES": "Wiki/Reports"})
-        env.start()
-        self.addCleanup(env.stop)
 
     def put(self, name, body):
         path = self.root / (name + ".md")
@@ -57,23 +54,48 @@ class DocumentTests(unittest.TestCase):
         with self.assertRaisesRegex(KnowledgeError, "does not fit"):
             query_pages(*args, include_content=True, max_bytes=1000)
 
-    def test_search_isolation_and_explicit_opt_in(self):
-        self.put("Wiki/Reports/a", "garden")
-        self.put("Wiki/ReportsArchive/a", "garden")
-        self.assertEqual(1, search_pages(self.root, "garden")["total"])
-        self.assertEqual(2, search_pages(self.root, "garden", include_excluded=True)["total"])
-        client = KnowledgeClient("http://localhost", self.root / "token", self.root)
-        with patch.object(KnowledgeClient, "from_environment", return_value=client), \
-             patch.object(v3_api, "_api", return_value={"items": [{"page": "Wiki/Reports/stale"},
-                                                                  {"page": "Wiki/ReportsArchive/a"}]}) as api:
-            result = v3_api.find("garden", "natural")
-            self.assertEqual(["Wiki/Reports/a"], api.call_args.kwargs["payload"]["exclude"])
-            self.assertTrue(result["partial"])
-            self.assertEqual(1, len(result["items"]))
-            v3_api.related("Wiki/Example")
-            self.assertEqual(["Wiki/Reports/a"], api.call_args.kwargs["payload"]["exclude"])
-            self.assertEqual(2, len(v3_api.find("garden", include_excluded=True)["items"]))
-            self.assertNotIn("exclude", api.call_args.kwargs["payload"])
+    def test_space_routing_and_native_isolation(self):
+        import httpx
+        reports = self.root / "reports"
+        knowledge = self.root / "knowledge"
+        reports.mkdir()
+        knowledge.mkdir()
+        (reports / "report.md").write_text("garden", encoding="utf-8")
+        (knowledge / "context.md").write_text("garden", encoding="utf-8")
+        token = self.root / "token"
+        token.write_text("test-token")
+        with patch.dict("os.environ", {"KNOWLEDGE_SPACE_DIR": str(knowledge),
+                                      "REPORTS_SPACE_DIR": str(reports),
+                                      "KNOWLEDGE_BASE_URL": "http://localhost:3000",
+                                      "KNOWLEDGE_TOKEN_FILE": str(token)}):
+            self.assertEqual("context", search_pages(KnowledgeClient.from_environment().root,
+                                                     "garden")["results"][0]["page"])
+            self.assertEqual("report", search_pages(KnowledgeClient.from_environment("reports").root,
+                                                    "garden")["results"][0]["page"])
+            calls = []
+            def handle(request):
+                calls.append(request)
+                if request.url.path.endswith("/.search/query"):
+                    return httpx.Response(200, json={"items": []})
+                return httpx.Response(200, content=b"body", headers={"etag": "rev"})
+            original = httpx.Client
+            with patch.object(httpx, "Client", side_effect=lambda *a, **kw:
+                              original(*a, transport=httpx.MockTransport(handle), **kw)):
+                v3_api.find("garden")
+                v3_api.find("garden", space="reports")
+                KnowledgeClient.from_environment("reports").create_page("News/a", "body")
+                KnowledgeClient.from_environment("reports").read_page("News/a")
+            self.assertEqual(["/.search/query", "/reports/.search/query",
+                              "/reports/.fs/News/a.md", "/reports/.fs/News/a.md"],
+                             [r.url.path for r in calls])
+            self.assertTrue(all(r.headers["authorization"] == "Bearer test-token" for r in calls))
+            self.assertNotIn("exclude", json.loads(calls[0].content))
+            with self.assertRaises(KnowledgeError):
+                KnowledgeClient.from_environment("unknown")
+            with self.assertRaises(KnowledgeError):
+                KnowledgeClient.from_environment().create_page("News/a", "body")
+            with self.assertRaises(KnowledgeError):
+                KnowledgeClient.from_environment("reports").create_page("Library/Config", "body")
 
     def test_idempotent_create_does_not_overwrite(self):
         client = KnowledgeClient("http://localhost", self.root / "token", self.root)

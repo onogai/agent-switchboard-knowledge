@@ -23,6 +23,10 @@ class KnowledgeError(ValueError):
     """A user-actionable knowledge operation error."""
 
 
+class PageConflict(KnowledgeError):
+    """A conditional SilverBullet write failed."""
+
+
 def page_path(page: str, *, writable: bool = False) -> str:
     if not isinstance(page, str):
         raise KnowledgeError("Page must be a string.")
@@ -41,20 +45,6 @@ def page_path(page: str, *, writable: bool = False) -> str:
     return "/".join(parts) + ".md"
 
 
-class PageConflict(KnowledgeError):
-    """A conditional SilverBullet write failed."""
-
-
-def search_exclude_prefixes() -> tuple[str, ...]:
-    raw = os.environ.get("KNOWLEDGE_SEARCH_EXCLUDE_PREFIXES", "Wiki/Reports")
-    return tuple(dict.fromkeys(page_path(part.strip().rstrip("/"))[:-3]
-                               for part in raw.split(",") if part.strip()))
-
-
-def is_excluded(page: str, prefixes: tuple[str, ...]) -> bool:
-    return any(page.startswith(prefix + "/") for prefix in prefixes)
-
-
 def folder_pages(root: Path, prefix: str):
     """Walk only a named subtree, without following symlinked ancestors."""
     if not root.is_dir():
@@ -65,11 +55,6 @@ def folder_pages(root: Path, prefix: str):
         if directory.is_symlink() or not directory.is_dir():
             return
     yield from _pages(directory)
-
-
-def excluded_page_names(root: Path, prefixes: tuple[str, ...]) -> list[str]:
-    return sorted({_page_name(path, root)
-                   for prefix in prefixes for path in folder_pages(root, prefix)})
 
 
 def _page_name(path: Path, root: Path) -> str:
@@ -103,7 +88,7 @@ def _validate_content(content: str) -> None:
         raise KnowledgeError("Executable SilverBullet markup is not allowed through MCP writes.")
 
 
-def search_pages(root: Path, query: str, limit: int = 10, include_excluded: bool = False) -> dict:
+def search_pages(root: Path, query: str, limit: int = 10) -> dict:
     query = query.strip()
     if not 2 <= len(query) <= 200:
         raise KnowledgeError("Search query must be 2–200 characters.")
@@ -111,10 +96,9 @@ def search_pages(root: Path, query: str, limit: int = 10, include_excluded: bool
         raise KnowledgeError("Limit must be 1–30.")
     words = [word.casefold() for word in query.split()]
     matches = []
-    prefixes = () if include_excluded else search_exclude_prefixes()
     for path in _pages(root):
         page = _page_name(path, root)
-        if page == "CONFIG" or page.startswith("Library/") or is_excluded(page, prefixes):
+        if page == "CONFIG" or page.startswith("Library/"):
             continue
         content = _read_text(path)
         if content is None:
@@ -220,18 +204,32 @@ def list_feedback(root: Path, limit: int = 20) -> dict:
 
 
 class KnowledgeClient:
-    def __init__(self, base_url: str, token_file: Path, root: Path):
+    def __init__(self, base_url: str, token_file: Path, root: Path, space: str = "knowledge"):
+        if space not in {"knowledge", "reports"}:
+            raise KnowledgeError("Space must be knowledge or reports.")
         self.base_url = base_url.rstrip("/")
         self.token_file = token_file
         self.root = root
+        self.space = space
 
     @classmethod
-    def from_environment(cls) -> "KnowledgeClient":
+    def from_environment(cls, space: str = "knowledge") -> "KnowledgeClient":
+        if space not in {"knowledge", "reports"}:
+            raise KnowledgeError("Space must be knowledge or reports.")
+        base = os.environ.get("KNOWLEDGE_BASE_URL", "http://silverbullet:3000").rstrip("/")
         return cls(
-            os.environ.get("KNOWLEDGE_BASE_URL", "http://silverbullet:3000"),
+            base + ("/reports" if space == "reports" else ""),
             Path(os.environ.get("KNOWLEDGE_TOKEN_FILE", "/home/ubuntu/silverbullet-api-token")),
-            Path(os.environ.get("KNOWLEDGE_SPACE_DIR", "/knowledge")),
+            Path(os.environ.get("REPORTS_SPACE_DIR", "/reports") if space == "reports"
+                 else os.environ.get("KNOWLEDGE_SPACE_DIR", "/knowledge")),
+            space,
         )
+
+    def _writable_path(self, page: str) -> str:
+        path = page_path(page, writable=self.space == "knowledge")
+        if self.space == "reports" and (path == "CONFIG.md" or path.startswith("Library/")):
+            raise KnowledgeError("Agent writes cannot modify protected Reports pages.")
+        return path
 
     def _token(self) -> str:
         try:
@@ -294,8 +292,8 @@ class KnowledgeClient:
         return {"page": path[:-3], "etag": response.headers.get("etag")}
 
     def create_page(self, page: str, content: str, idempotent: bool = False) -> dict:
-        path = page_path(page, writable=True)
-        if not path.startswith("Wiki/"):
+        path = self._writable_path(page)
+        if self.space == "knowledge" and not path.startswith("Wiki/"):
             raise KnowledgeError("New wiki pages must be under Wiki/.")
         _validate_content(content)
         try:
@@ -313,7 +311,7 @@ class KnowledgeClient:
         return result
 
     def update_page(self, page: str, content: str, etag: str) -> dict:
-        path = page_path(page, writable=True)
+        path = self._writable_path(page)
         _validate_content(content)
         if not re.fullmatch(r'"sha256:[0-9a-fA-F]{64}"', etag or ""):
             raise KnowledgeError("A current SilverBullet ETag from read_page is required.")
@@ -345,8 +343,8 @@ class KnowledgeClient:
     def move_page(self, source: str, destination: str, etag: str) -> dict:
         """Copy to a new path, then conditionally delete the source; roll back on conflict."""
         self._require_etag(etag)
-        src = page_path(source, writable=True)
-        dst = page_path(destination, writable=True)
+        src = self._writable_path(source)
+        dst = self._writable_path(destination)
         if src == dst:
             raise KnowledgeError("Source and destination must be different pages.")
         current = self.read_page(source)
@@ -390,12 +388,12 @@ class KnowledgeClient:
         self._require_etag(etag)
         if confirm is not True:
             raise KnowledgeError("Explicit confirm=true is required to delete a page.")
-        path = page_path(page, writable=True)
+        path = self._writable_path(page)
         self._request("DELETE", path, etag=etag)
         return {"page": path[:-3], "deleted": True}
 
     def resolve_feedback(self, page: str, feedback_id: str, etag: str) -> dict:
-        path = page_path(page, writable=True)
+        path = self._writable_path(page)
         if not re.fullmatch(r"[0-9a-f]{16}", feedback_id):
             raise KnowledgeError("Invalid feedback ID.")
         current = self.read_page(page)
